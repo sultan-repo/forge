@@ -10,6 +10,7 @@ Forge is a methodology skill, so changes should be driven by observed behavior r
 - Keep `SKILL.md` compact and move deep procedures into references.
 - New universal rules should address a demonstrated cross-project failure mode.
 - Do not weaken scope conservation, authority, trust boundaries, verification, or convergence.
+- Preserve the one-prompt remote-bootstrap path and explicit-name-only auto-invocation behavior.
 
 ## Before submitting a change
 

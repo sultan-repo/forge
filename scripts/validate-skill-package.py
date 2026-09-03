@@ -16,7 +16,8 @@ else:
     lines=text.count("\n")+1
     if lines >= 500: err(f"SKILL.md is {lines} lines; must stay under 500")
     if not text.startswith("---\n"): err("SKILL.md missing YAML frontmatter")
-    if "disable-model-invocation: true" not in text: warn("skill is no longer manual-only")
+    if "disable-model-invocation: false" not in text: err("Forge must allow model invocation for explicit-name requests")
+    if "explicitly mentions Forge" not in text: err("Forge description must constrain automatic invocation to explicit Forge requests")
     # Check relative links in the skill body.
     for target in re.findall(r"\[[^\]]+\]\(([^)]+)\)", text):
         if "://" in target or target.startswith("#"): continue
@@ -26,7 +27,7 @@ else:
         if not p.exists(): err(f"SKILL.md references missing file: {target}")
 
 version=(root/"VERSION").read_text(encoding="utf-8").strip() if (root/"VERSION").exists() else None
-if version != "1.4.0": err(f"VERSION expected 1.4.0, got {version!r}")
+if version != "1.5.0": err(f"VERSION expected 1.5.0, got {version!r}")
 
 # Parse all packaged JSON.
 for p in root.rglob("*.json"):
@@ -58,6 +59,9 @@ else: err("control validator/example missing")
 
 # Expected package files.
 for rel in [
+    "BOOTSTRAP.md",
+    "scripts/bootstrap.sh",
+    "evals/bootstrap-evals.json",
     "references/requirements.md",
     "references/architecture-and-structure.md",
     "references/scope-and-plan-control.md",

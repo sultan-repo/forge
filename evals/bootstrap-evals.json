@@ -1,0 +1,31 @@
+{
+  "skill_name": "forge",
+  "suite": "remote-bootstrap",
+  "evals": [
+    {
+      "id": "bootstrap-01",
+      "prompt": "I am in a brand-new empty project folder. Use Forge from https://github.com/sultan-repo/forge to implement a web application for managing shared travel expenses. Forge is not installed yet.",
+      "expected_output": "Bootstrap Forge outside the product root, validate/install it when possible, load Forge directly for the current session, infer new mode, and continue requirements discovery without requiring a restart.",
+      "files": [],
+      "expectations": [
+        "Does not clone or mix Forge into the product source tree",
+        "Validates and installs Forge persistently when permitted",
+        "Loads/applies Forge in the current session even if /forge is not registered yet",
+        "Infers new mode from the empty workspace",
+        "Does not require a restart before continuing the project"
+      ]
+    },
+    {
+      "id": "bootstrap-02",
+      "prompt": "Forge is already installed. Use Forge to adopt this existing production repository and add exportable audit reports while preserving current behavior.",
+      "expected_output": "Because the user explicitly names Forge, Claude may invoke it automatically and should use adopt semantics before implementation.",
+      "files": [],
+      "expectations": [
+        "Recognizes explicit Forge naming as eligible for model invocation",
+        "Uses adopt/existing-project behavior",
+        "Inspects existing evidence before implementation",
+        "Preserves normal Forge approval and proportionality rules"
+      ]
+    }
+  ]
+}

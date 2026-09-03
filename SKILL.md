@@ -1,8 +1,8 @@
 ---
 name: forge
-description: Forge is a universal project execution methodology for Claude Code. Use manually to start, adopt, resume, review, or inspect a software/technical project with objective-first requirements, plan-controlled implementation, context protection, verification, and anti-drift control.
+description: Forge is a universal project execution methodology for Claude Code. Invoke only when the user explicitly mentions Forge, asks to use the Forge methodology, imports Forge for the current project, or invokes /forge. Supports new, adopt, continue, review, status, and help modes with objective-first requirements, plan-controlled implementation, context protection, verification, and anti-drift control.
 argument-hint: "[new|adopt|continue|review|status|help] [scope/request]"
-disable-model-invocation: true
+disable-model-invocation: false
 ---
 
 # Forge
@@ -18,6 +18,21 @@ Recognized modes:
 - `help`: explain these modes and usage.
 
 If no mode is supplied, infer the safest mode from project state. Do not copy this skill wholesale into project documentation. Distill only project-specific durable rules and state.
+
+## Remote bootstrap activation
+
+If you are reading this `SKILL.md` directly because the user explicitly asked to import/use Forge from a repository URL, treat that request as an explicit Forge invocation for the **current session** even if `/forge` has not yet appeared in Claude Code's command registry.
+
+Bootstrap rules:
+- do not clone Forge into the application/project root or mix Forge source files with product source; use a temporary directory or the personal skill location
+- install/persist Forge under `~/.claude/skills/forge/` when local permissions allow
+- validate the fetched package before relying on it when the packaged validator is available
+- after installation, load the installed `SKILL.md` directly and continue immediately; do not stop merely to request a Claude Code restart
+- if the top-level skills directory did not exist when the session started, explain that `/forge` may require a later restart while still applying Forge directly in the current session
+- if persistence is unavailable but the user-authorized Forge files are readable, apply the loaded methodology for the current session and disclose that `/forge` was not persistently installed
+- infer `new` when the workspace is empty/clearly greenfield and `adopt` when existing implementation/project evidence is present, unless the user explicitly specifies a mode
+
+Read [BOOTSTRAP.md](BOOTSTRAP.md) when handling remote installation/bootstrap.
 
 ## 1. Objective, proportionality, and authority
 

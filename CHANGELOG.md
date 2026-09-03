@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.5.0
+
+Adds one-prompt remote bootstrap and explicit-name natural-language invocation.
+
+- adds `BOOTSTRAP.md` with an agent-facing remote installation/activation protocol
+- adds `scripts/bootstrap.sh` for validate + install + current-session activation guidance
+- changes `disable-model-invocation` to `false` while narrowing the skill description so Claude should auto-invoke Forge only when the user explicitly names Forge or requests the Forge methodology
+- allows prompts such as `Use Forge from https://github.com/sultan-repo/forge to implement: ...`
+- requires remote bootstrap to keep Forge outside the product source tree
+- loads Forge directly in the bootstrap session so command-registration restart is not a blocker
+- documents Claude Code's live skill discovery caveat when the top-level skills directory did not exist at session start
+- hardens `scripts/install.sh` for direct-in-place installations
+- adds `evals/bootstrap-evals.json` with remote-bootstrap and installed natural-language invocation regressions
+
 ## 1.4.0
 
 Renames the skill and public command from **Project Execution** / `/project-execution` to **Forge** / `/forge`.
