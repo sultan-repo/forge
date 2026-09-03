@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "project-control.schema.json",
+  "title": "Forge Control State",
+  "type": "object",
+  "required": [
+    "version",
+    "baseline_id",
+    "baseline_revision",
+    "plan_revision",
+    "active_milestones",
+    "active_work_packets",
+    "resume_queue",
+    "requirements",
+    "milestones",
+    "work_packets",
+    "plan_deltas",
+    "archived_plan_deltas",
+    "gates",
+    "last_reconciliation"
+  ],
+  "properties": {
+    "version": {"const": 3},
+    "baseline_id": {"type": "string", "minLength": 1},
+    "baseline_revision": {"type": "integer", "minimum": 1},
+    "plan_revision": {"type": "integer", "minimum": 1},
+    "active_milestones": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "active_work_packets": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "resume_queue": {"type": "array", "items": {"type": "string"}},
+    "requirements": {"type": "object"},
+    "milestones": {"type": "object"},
+    "work_packets": {"type": "object"},
+    "plan_deltas": {"type": "array"},
+    "archived_plan_deltas": {"type": "array"},
+    "canonicalized_through_plan_revision": {"type": "integer", "minimum": 1},
+    "gates": {
+      "type": "object",
+      "required": ["plan_consistency", "convergence"],
+      "properties": {
+        "plan_consistency": {"type": "object"},
+        "convergence": {"type": "object"}
+      },
+      "additionalProperties": true
+    },
+    "last_reconciliation": {"type": "object"}
+  },
+  "additionalProperties": true
+}

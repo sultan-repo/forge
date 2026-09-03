@@ -1,0 +1,87 @@
+{
+  "version": 3,
+  "baseline_id": "RB-1",
+  "baseline_revision": 1,
+  "plan_revision": 1,
+  "active_milestones": ["M1"],
+  "active_work_packets": ["WP-1.1"],
+  "resume_queue": ["WP-1.2"],
+  "requirements": {
+    "FR-001": {
+      "status": "in_progress",
+      "milestone": "M1",
+      "work_packets": ["WP-1.1"],
+      "evidence": []
+    },
+    "NFR-001": {
+      "status": "planned",
+      "milestone": "M2",
+      "work_packets": [],
+      "evidence": []
+    }
+  },
+  "milestones": {
+    "M1": {
+      "status": "in_progress",
+      "requirements": ["FR-001"]
+    },
+    "M2": {
+      "status": "planned",
+      "requirements": ["NFR-001"]
+    }
+  },
+  "work_packets": {
+    "WP-1.1": {
+      "status": "in_progress",
+      "parent": "M1",
+      "requirements": ["FR-001"],
+      "baseline_revision": 1,
+      "plan_revision": 1,
+      "workstream": "core",
+      "owner": "main",
+      "dependencies": [],
+      "return_to": "WP-1.2",
+      "acceptance_status": "pending",
+      "validation_status": "pending",
+      "reconciled": false
+    },
+    "WP-1.2": {
+      "status": "planned",
+      "parent": "M1",
+      "requirements": ["FR-001"],
+      "baseline_revision": 1,
+      "plan_revision": 1,
+      "workstream": "core",
+      "owner": null,
+      "dependencies": ["WP-1.1"],
+      "return_to": "M1",
+      "acceptance_status": "pending",
+      "validation_status": "pending",
+      "reconciled": false
+    }
+  },
+  "plan_deltas": [],
+  "archived_plan_deltas": [],
+  "canonicalized_through_plan_revision": 1,
+  "gates": {
+    "plan_consistency": {
+      "status": "passed",
+      "baseline_revision": 1,
+      "plan_revision": 1,
+      "notes": "Example only. Re-run after material baseline/plan changes."
+    },
+    "convergence": {
+      "status": "pending",
+      "baseline_revision": 1,
+      "plan_revision": 1,
+      "notes": "Expected to run at milestone/release closure."
+    }
+  },
+  "last_reconciliation": {
+    "work_packet": null,
+    "plan_revision": 1,
+    "coverage_ok": true,
+    "open_detours": [],
+    "notes": "Example only. Adapt to project."
+  }
+}
