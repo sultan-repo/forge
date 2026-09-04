@@ -1,88 +1,79 @@
 # Orchestration and Capability Routing Reference
 
-Use this reference when deciding whether work belongs in the main session, subagent, isolated worktree/session, agent team, or batch/fan-out mechanism.
+Use this reference to choose an execution mechanism without coupling Forge to model names or temporary platform assumptions.
 
-## 1. Controller principle
+## 1. Capability-first routing
 
-The main/controller context owns:
-- objective
-- canonical requirements/invariants
-- current baseline/plan revisions
-- roadmap/control state
-- approval decisions
-- integration
-- reconciliation
-- convergence
+Never hardcode behavior to:
+- a model family/name/generation
+- an assumed permanent tool name
+- a specific platform version
+- the presence of an experimental feature
+- a fixed agent roster
+
+Detect capabilities when needed. Route by what the environment actually supports and what the work requires.
+
+## 2. Controller principle
+
+The main/controller context owns objective, canonical requirements/invariants, current revisions, roadmap/control state, approval decisions, integration, reconciliation, and convergence.
 
 Workers own bounded investigation or implementation.
 
-The controller should receive compact conclusions and evidence pointers, not entire worker transcripts, giant logs, or broad file dumps unless integration requires them.
+The controller should receive compact conclusions and evidence pointers, not full transcripts or giant logs unless integration requires them.
 
-## 2. Routing table
+## 3. Routing by capability
 
-### Main agent
-Use for:
-- quick/local work
-- tightly coupled same-file changes
-- decisions needing continuous user interaction
-- integration/reconciliation
+### Cohesive local execution
+Use the main agent/context for quick changes, tightly coupled edits, user-facing decisions, integration, and reconciliation.
 
-### Fresh subagent
-Use for:
-- large repository exploration
-- log/root-cause analysis
-- independent verification
-- external research
-- a bounded Work Packet likely to flood controller context
+### Context-isolated worker
+When supported, use a fresh worker/subagent for large exploration, log/root-cause analysis, independent verification, external research, or a Work Packet likely to flood controller context.
 
-Subagent delegation must include parent packet, requirement/invariant IDs, baseline/plan revisions, allowed/prohibited scope, evidence sources, acceptance criteria, validation, and return expectations.
+Delegation includes parent packet, requirement/invariant IDs, baseline/plan revisions, allowed/prohibited scope, evidence sources, acceptance, validation, and return expectations.
 
-### Isolated worktree/session
-Use when parallel editors might collide or need independent checkouts. Prefer explicit file/component ownership.
+### Isolated checkout/worktree
+When supported, use isolation for parallel editors that might collide. Partition ownership explicitly.
 
-### Agent team
-Use only when workers need peer-to-peer communication, coordinated shared tasks, competing hypotheses, cross-layer collaboration, or active debate. Agent teams may be experimental/disabled and add coordination/token cost. Do not require them for ordinary work.
+### Collaborative multi-agent mechanism
+Use only when workers need peer-to-peer communication, competing hypotheses, cross-layer coordination, or active debate. Do not use collaboration merely because it exists.
 
-### Batch/fan-out
-When a supported native batch mechanism is available, consider it for large mechanical/repository-wide changes that can be split into many independent worktree-isolated units. Do not use it for highly coupled architectural work.
+### Batch/fan-out mechanism
+When supported, consider it for large mechanical changes that split cleanly into independent units. Avoid it for tightly coupled architecture.
 
-## 3. Information-value rule
+## 4. Graceful degradation
 
-Every additional worker must answer a distinct bounded question or own an independent deliverable. Stop adding workers when new perspectives are unlikely to change the decision or confidence.
-
-## 4. Capability detection and graceful degradation
-
-Before relying on a feature, determine whether it is available and appropriate.
-
-Fallbacks:
-- agent team unavailable -> subagents or sequential controller
-- subagents unavailable -> focused single-session Work Packets
-- worktrees unavailable -> sequential editing/non-overlapping ownership
-- hooks/tasks unavailable -> explicit manual reconciliation/validation
+Examples:
+- collaboration unavailable -> independent workers or sequential controller
+- isolated workers unavailable -> focused single-session packets
+- worktree isolation unavailable -> sequential/non-overlapping editing
+- lifecycle hooks unavailable -> explicit orientation/reconciliation
+- native task system unavailable -> durable Forge Work Packets
 - code intelligence unavailable -> targeted search/read navigation
-- browser/UI tooling unavailable -> structural/manual verification and disclose limitation
-- batch unavailable -> manually partition independent packets
+- UI/browser verification unavailable -> structural/manual verification with disclosed limitation
+- native batch mechanism unavailable -> manual partitioning
 
-The methodology must remain usable without optional Claude Code features.
+The methodology must remain usable when optional capabilities change or disappear.
 
 ## 5. Worker return contract
 
-A worker returns:
+Return:
 - packet/question ID
 - baseline + plan revisions used
 - conclusion/result
 - files/components changed or inspected
 - evidence/test results
 - unresolved uncertainty
-- discovered adjacent work classified
-- whether acceptance criteria are met
-- any stale-context warning
+- classified adjacent discoveries
+- acceptance status
+- stale-context warning
 - recommended `return_to`
 
-If current controller revisions differ, reconcile before integrating.
+If controller revisions differ, reconcile before integration.
 
-## 6. Large-codebase context economy
+## 6. Information-value rule
 
-Prefer symbol/reference navigation, LSP/code intelligence, targeted grep/search, dependency graphs, and small repository maps over repeatedly reading whole directories.
+Every additional worker must answer a distinct bounded question or own an independent deliverable. Stop adding workers when another perspective is unlikely to change the decision or confidence.
 
-Create a durable repository map only when it materially reduces rediscovery. Do not maintain a giant static encyclopedia that immediately goes stale.
+## 7. Large-codebase context economy
+
+Prefer whatever current code-intelligence/navigation capabilities are available, plus targeted search, dependency relationships, test references, and small repository maps. Avoid repeated broad directory dumps or giant static repository encyclopedias.
