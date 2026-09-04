@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Validate generic Forge control-state invariants.
 
 Usage:
