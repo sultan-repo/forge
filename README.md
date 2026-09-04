@@ -75,7 +75,7 @@ See [BOOTSTRAP.md](BOOTSTRAP.md).
 | Review | Spec compliance first, scope-aware finding triage |
 | Security | Trust boundary, least privilege, risky-change safeguards |
 | Completion | Requirement coverage and Convergence |
-| Methodology QA | Behavioral evals and benchmark protocol |
+| Methodology QA | Behavioral evals plus an executable isolated A/B benchmark harness |
 
 ## Your first prompt is not the specification
 
@@ -164,6 +164,8 @@ For substantial projects Forge can maintain revisioned project state, Work Packe
 
 When lifecycle hooks are available, Forge prefers a deterministic session-start orientation hook for Control Mode. Task-completion guards are optional and only apply when a native task lifecycle exists.
 
+The bundled Python governance templates are conventional typed Python and are CI-checked with Ruff and strict mypy so copying them into a downstream repository should not require blanket `.claude/` lint exclusions.
+
 See:
 - [scope and plan control](references/scope-and-plan-control.md)
 - [optional lifecycle hooks](references/optional-task-hooks.md)
@@ -201,18 +203,20 @@ For stronger supply-chain assurance, prefer a verified immutable/versioned relea
 
 ## Evaluation status
 
-Forge includes behavioral regression scenarios and a core benchmark protocol.
+Forge includes behavioral regression scenarios and an **executable core benchmark instrument**.
 
-**No with-Forge vs no-Forge performance claims are published yet.** We will not invent pass rates.
+The A/B harness provides real fixture repositories, hidden REQ-tagged tests, deterministic scoring, raw evidence capture, container-isolated fresh agent sessions, verified immutable Forge loading, activation preflight, paired/randomized arm order, and a genuine two-session context-loss test.
 
-The initial core benchmark set covers:
+**No with-Forge vs no-Forge performance claims are published yet.** Mock self-tests validate the benchmark instrument only. We will not invent pass rates.
+
+The core benchmark set covers:
 
 1. scope retention
 2. debugging tunnel vision
-3. compaction recovery
+3. context-loss recovery across fresh sessions
 4. proportionality on tiny changes
 
-See [evals/README.md](evals/README.md) and [CORE-BENCHMARKS.md](evals/CORE-BENCHMARKS.md).
+See [evals/README.md](evals/README.md), [CORE-BENCHMARKS.md](evals/CORE-BENCHMARKS.md), and the [executable harness](evals/core/README.md).
 
 ## What Forge is not
 
@@ -231,6 +235,7 @@ forge/
 ├── references/
 ├── templates/
 ├── evals/
+│   └── core/          # executable benchmark instrument
 ├── scripts/
 └── docs/
 ```
@@ -243,7 +248,7 @@ python3 scripts/validate-skill-package.py
 
 ## Version
 
-Current version: **1.6.2**
+Current version: **1.7.0**
 
 ## License
 
