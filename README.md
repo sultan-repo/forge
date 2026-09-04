@@ -243,7 +243,7 @@ python3 scripts/validate-skill-package.py
 
 ## Version
 
-Current version: **1.6.1**
+Current version: **1.6.2**
 
 ## License
 
