@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.7.1
+
+Documentation and CI maintenance release. Forge methodology and benchmark claims are unchanged.
+
+- improves the README's adoption path with an early evidence-status callout and clearer guidance on when Forge is useful
+- documents what Forge may add to a downstream project and makes proportional project footprint explicit
+- replaces mutable-`main` permanent-install guidance with a verified latest-stable-release-first flow
+- clarifies how repository-URL invocation, existing local installations, and exact-version reproducibility behave
+- adds lightweight validation/release/license navigation near the top of the README and a short development section
+- updates GitHub Actions workflow dependencies to Node 24-native `actions/checkout@v7` and `actions/setup-python@v7`, removing the Node 20 deprecation warning on current hosted runners
+- preserves the v1.7 executable benchmark instrument, template lint guarantees, and evidence-first policy without publishing unmeasured performance claims
+
 ## 1.7.0
 
 Turns Forge's empirical benchmark from a prose protocol into a hardened executable instrument and improves downstream template quality.
