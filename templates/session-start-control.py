@@ -1,43 +1,131 @@
 #!/usr/bin/env python3
-"""SessionStart hook: inject a concise execution-control orientation.
+"""SessionStart hook that injects a concise Forge execution orientation.
 
-Copy/adapt to .claude/hooks/session-start-control.py and configure for
-startup|resume|clear|compact. Non-blocking by design.
+Copy or adapt this file to a project hook location and configure it for the
+session lifecycle events supported by the current environment. The hook is
+non-blocking by design.
 """
-import json, subprocess, sys
+
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
 from pathlib import Path
+from typing import Any
 
-try: inp=json.load(sys.stdin)
-except Exception: inp={}
-root=Path(inp.get("cwd") or ".")
-control=root/".claude"/"project-control.json"
-if not control.exists(): sys.exit(0)
-try: d=json.loads(control.read_text(encoding="utf-8"))
-except Exception as e:
-    msg=f"EXECUTION CONTROL WARNING: cannot parse {control}: {e}. Reconcile control state before substantive implementation."
-else:
-    validation="not checked"
-    validator=root/".claude"/"control"/"validate-project-control.py"
-    if validator.exists():
-        p=subprocess.run([sys.executable,str(validator),str(control)],capture_output=True,text=True)
-        validation="valid" if p.returncode==0 else "INVALID: "+(p.stderr.strip().splitlines()[-1] if p.stderr.strip() else "validator failed")
-    active_m=", ".join(d.get("active_milestones",[])) or "none"
-    active_w=", ".join(d.get("active_work_packets",[])) or "none"
-    resume=", ".join(d.get("resume_queue",[])) or "none"
-    blockers=[wid for wid,w in d.get("work_packets",{}).items() if w.get("status")=="blocked"]
-    gates=d.get("gates",{})
-    pc=gates.get("plan_consistency",{}).get("status","unknown")
-    conv=gates.get("convergence",{}).get("status","unknown")
-    msg=("EXECUTION CONTROL ORIENTATION\n"
-         f"Baseline: {d.get('baseline_id')} rev {d.get('baseline_revision')}\n"
-         f"Plan revision: {d.get('plan_revision')}\n"
-         f"Plan consistency: {pc}\n"
-         f"Convergence: {conv}\n"
-         f"Active milestones: {active_m}\n"
-         f"Active work packets: {active_w}\n"
-         f"Blocked packets: {', '.join(blockers) or 'none'}\n"
-         f"Resume queue: {resume}\n"
-         f"Control validation: {validation}\n"
-         "Before substantive implementation, load/reconcile the active packet and current plan state. Do not let local work replace the approved roadmap.")
+JsonObject = dict[str, Any]
 
-print(json.dumps({"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":msg}}))
+
+def read_event() -> JsonObject:
+    """Read a hook event from stdin, returning an empty event on malformed input."""
+    try:
+        value = json.load(sys.stdin)
+    except (json.JSONDecodeError, OSError, UnicodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def validate_control(root: Path, control: Path) -> str:
+    """Return a concise validation status without blocking session startup."""
+    validator_candidates = (
+        root / ".claude" / "hooks" / "validate-project-control.py",
+        root / ".claude" / "control" / "validate-project-control.py",
+    )
+    validator = next((path for path in validator_candidates if path.exists()), None)
+    if validator is None:
+        return "not checked"
+
+    completed = subprocess.run(
+        [sys.executable, str(validator), str(control)],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if completed.returncode == 0:
+        return "valid"
+
+    stderr_lines = completed.stderr.strip().splitlines()
+    detail = stderr_lines[-1] if stderr_lines else "validator failed"
+    return f"INVALID: {detail}"
+
+
+def orientation_message(state: JsonObject, validation: str) -> str:
+    """Build the concise context injected into the new session."""
+    active_milestones = ", ".join(map(str, state.get("active_milestones", []))) or "none"
+    active_packets = ", ".join(map(str, state.get("active_work_packets", []))) or "none"
+    resume_queue = ", ".join(map(str, state.get("resume_queue", []))) or "none"
+
+    packet_map = state.get("work_packets", {})
+    blockers: list[str] = []
+    if isinstance(packet_map, dict):
+        blockers = [
+            str(packet_id)
+            for packet_id, packet in packet_map.items()
+            if isinstance(packet, dict) and packet.get("status") == "blocked"
+        ]
+
+    gates = state.get("gates", {})
+    if not isinstance(gates, dict):
+        gates = {}
+    plan_gate = gates.get("plan_consistency", {})
+    convergence_gate = gates.get("convergence", {})
+    if not isinstance(plan_gate, dict):
+        plan_gate = {}
+    if not isinstance(convergence_gate, dict):
+        convergence_gate = {}
+
+    return "\n".join(
+        (
+            "EXECUTION CONTROL ORIENTATION",
+            f"Baseline: {state.get('baseline_id')} rev {state.get('baseline_revision')}",
+            f"Plan revision: {state.get('plan_revision')}",
+            f"Plan consistency: {plan_gate.get('status', 'unknown')}",
+            f"Convergence: {convergence_gate.get('status', 'unknown')}",
+            f"Active milestones: {active_milestones}",
+            f"Active work packets: {active_packets}",
+            f"Blocked packets: {', '.join(blockers) or 'none'}",
+            f"Resume queue: {resume_queue}",
+            f"Control validation: {validation}",
+            "Before substantive implementation, load/reconcile the active packet and current plan state. "
+            "Do not let local work replace the approved roadmap.",
+        )
+    )
+
+
+def main() -> int:
+    """Hook entry point."""
+    event = read_event()
+    root = Path(str(event.get("cwd") or "."))
+    control = root / ".claude" / "project-control.json"
+    if not control.exists():
+        return 0
+
+    try:
+        raw_state = json.loads(control.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        message = (
+            f"EXECUTION CONTROL WARNING: cannot parse {control}: {exc}. "
+            "Reconcile control state before substantive implementation."
+        )
+    else:
+        if not isinstance(raw_state, dict):
+            message = (
+                f"EXECUTION CONTROL WARNING: {control} must contain a JSON object. "
+                "Reconcile control state before substantive implementation."
+            )
+        else:
+            message = orientation_message(raw_state, validate_control(root, control))
+
+    output = {
+        "hookSpecificOutput": {
+            "hookEventName": "SessionStart",
+            "additionalContext": message,
+        }
+    }
+    print(json.dumps(output))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
