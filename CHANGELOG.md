@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.7.0
+
+Turns Forge's empirical benchmark from a prose protocol into a hardened executable instrument and improves downstream template quality.
+
+- adds `evals/core/`, an executable A/B benchmark harness for scope retention, debugging tunnel vision, context-loss recovery, and proportionality
+- uses real fixture repositories, hidden REQ-tagged tests, deterministic scoring, raw transcript/diff/repository evidence, and aggregate reporting
+- requires container isolation for publishable real runs so agents cannot inspect hidden tests, scorer/reference code, other conditions, or other run outputs
+- loads Forge-arm runs from verified immutable release assets, verifies release and local asset provenance, validates the package fail-closed, and records the resolved release identity/digest
+- adds an automatic Forge activation preflight before Forge-arm benchmark cells are accepted
+- converts B3 into a genuine two-session context-loss test: Stage 1 leaves durable handoff state; Stage 2 uses a fresh agent config and repository state only
+- pairs A/B cells and deterministically randomizes arm/scenario order from a recorded seed
+- adds reference, no-op, and drifting mock agents so CI can self-test the benchmark instrument without claiming Forge effectiveness
+- compacts fixture content into a checked-in compressed bundle that materializes only when the harness runs
+- makes the package validator require, decode, syntax-check, and shell-check the executable benchmark instrument
+- reformats and types `templates/validate-project-control.py`, `templates/session-start-control.py`, and `templates/task-completed-control.py` so downstream repositories do not need blanket `.claude/` lint exclusions for Forge's own Python
+- adds CI Ruff checks and strict mypy checks for downstream-copied Python governance templates
+- keeps benchmark claims unchanged: **no real with-Forge vs no-Forge performance results are published until isolated runs are actually executed and reviewed**
+
 ## 1.6.2
 
 Release-pipeline reliability fix.
