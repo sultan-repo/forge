@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.6.2
+
+Release-pipeline reliability fix.
+
+- keeps the generic version-driven release workflow introduced in v1.6.1
+- fixes a timing race where an immutable release could be published before GitHub's release attestation became queryable
+- retries release and local-asset verification for a bounded window instead of failing immediately when attestation generation lags publication
+- preserves fail-closed behavior if verification still cannot succeed within the retry window
+- does not change Forge methodology or benchmark claims
+
 ## 1.6.1
 
 Release-engineering and validator maintenance after the first immutable v1.6 release.
