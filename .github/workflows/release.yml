@@ -1,0 +1,102 @@
+name: Release Forge
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'VERSION'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out release commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate Forge
+        run: python3 scripts/validate-skill-package.py
+
+      - name: Resolve release identity
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(tr -d '[:space:]' < VERSION)"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "VERSION is not a supported semantic version: $version" >&2
+            exit 2
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "asset=forge-skill-v$version.zip" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure release does not already exist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "Release $TAG already exists. Refusing to replace an existing release." >&2
+            exit 2
+          fi
+
+      - name: Build release archive
+        env:
+          ASSET: ${{ steps.release.outputs.asset }}
+        run: git archive --format=zip --prefix=forge/ HEAD -o "$ASSET"
+
+      - name: Generate release notes from changelog
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          python3 - <<'PY'
+          import os, re
+          from pathlib import Path
+
+          version = os.environ['VERSION']
+          text = Path('CHANGELOG.md').read_text(encoding='utf-8')
+          pattern = rf'^##\s+{re.escape(version)}\s*$\n(.*?)(?=^##\s+|\Z)'
+          match = re.search(pattern, text, flags=re.M | re.S)
+          if not match:
+              raise SystemExit(f'CHANGELOG.md has no section for {version}')
+          body = match.group(1).strip()
+          Path('/tmp/forge-release-notes.md').write_text(
+              f'Forge v{version}\n\n{body}\n\nRelease commit: {os.environ.get("GITHUB_SHA", "unknown")}\n',
+              encoding='utf-8',
+          )
+          PY
+
+      - name: Create draft release with asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+          ASSET: ${{ steps.release.outputs.asset }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          gh release create "$TAG" \
+            "$ASSET#Forge skill package v$VERSION" \
+            --repo "${{ github.repository }}" \
+            --target "$GITHUB_SHA" \
+            --title "Forge v$VERSION" \
+            --notes-file /tmp/forge-release-notes.md \
+            --draft
+
+      - name: Publish immutable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: gh release edit "$TAG" --repo "${{ github.repository }}" --draft=false --latest
+
+      - name: Verify published release and asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+          ASSET: ${{ steps.release.outputs.asset }}
+        run: |
+          gh release verify "$TAG" --repo "${{ github.repository }}"
+          gh release verify-asset "$TAG" "$ASSET" --repo "${{ github.repository }}"
