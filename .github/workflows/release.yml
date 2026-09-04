@@ -98,5 +98,23 @@ jobs:
           TAG: ${{ steps.release.outputs.tag }}
           ASSET: ${{ steps.release.outputs.asset }}
         run: |
-          gh release verify "$TAG" --repo "${{ github.repository }}"
-          gh release verify-asset "$TAG" "$ASSET" --repo "${{ github.repository }}"
+          set -euo pipefail
+          max_attempts=12
+          delay_seconds=5
+          for attempt in $(seq 1 "$max_attempts"); do
+            if gh release verify "$TAG" --repo "${{ github.repository }}" >/tmp/release-verify.log 2>&1 && \
+               gh release verify-asset "$TAG" "$ASSET" --repo "${{ github.repository }}" >/tmp/asset-verify.log 2>&1; then
+              cat /tmp/release-verify.log
+              cat /tmp/asset-verify.log
+              echo "Release and asset verification succeeded on attempt $attempt."
+              exit 0
+            fi
+            echo "Release attestation not ready or verification incomplete (attempt $attempt/$max_attempts)."
+            if [ "$attempt" -lt "$max_attempts" ]; then
+              sleep "$delay_seconds"
+            fi
+          done
+          cat /tmp/release-verify.log >&2 || true
+          cat /tmp/asset-verify.log >&2 || true
+          echo "Release verification did not succeed before the retry window closed." >&2
+          exit 1
