@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """SessionStart hook that injects a concise Forge execution orientation.
 
 Copy or adapt this file to a project hook location and configure it for the
@@ -87,8 +86,7 @@ def orientation_message(state: JsonObject, validation: str) -> str:
             f"Blocked packets: {', '.join(blockers) or 'none'}",
             f"Resume queue: {resume_queue}",
             f"Control validation: {validation}",
-            "Before substantive implementation, load/reconcile the active packet and current plan state. "
-            "Do not let local work replace the approved roadmap.",
+            "Before substantive implementation, load/reconcile the active packet and current plan state. Do not let local work replace the approved roadmap.",
         )
     )
 
