@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.6.1
+
+Release-engineering and validator maintenance after the first immutable v1.6 release.
+
+- removes brittle validator checks that depended on exact prose such as specific capability-policy wording
+- removes model-family name lists from validation so Forge does not encode a catalog that can become stale
+- keeps capability-first behavior as methodology/eval behavior rather than coupling it to temporary model names
+- derives package version from `VERSION` instead of hardcoding a release number in the validator
+- cross-checks `VERSION` against the first `CHANGELOG.md` version heading
+- when validation runs on a tag, cross-checks the tag against `v${VERSION}`
+- makes `references/optional-task-hooks.md` a required package file because it is part of Forge's lifecycle-control guidance
+- replaces the one-off v1.6.0 release workflow with a generic version-driven release workflow
+- derives release tag, title, asset name, notes, and target commit from repository state at release time
+- creates releases as drafts, attaches the asset, publishes under immutable-release protection, then verifies the release and local asset
+- documents the generic release process and provider-generated release attestation
+- keeps benchmark claims unchanged: the protocol exists, but empirical results are still not published until real runs are completed
+
 ## 1.6.0
 
 Evidence-first and capability-first hardening.
