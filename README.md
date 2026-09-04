@@ -2,6 +2,9 @@
 
 **AI coding agents are great at finishing the task in front of them. Forge helps them finish the project.**
 
+[![Validate Forge](https://github.com/sultan-repo/forge/actions/workflows/validate.yml/badge.svg)](https://github.com/sultan-repo/forge/actions/workflows/validate.yml)
+[Latest release](https://github.com/sultan-repo/forge/releases/latest) · [MIT License](LICENSE)
+
 Forge is a Claude Code project-execution skill that turns rough ideas into validated requirements, keeps implementation aligned with the master plan, protects context across long sessions, coordinates available agent capabilities, and verifies the finished system against the original intent.
 
 ```text
@@ -10,6 +13,24 @@ Requirements -> Architecture -> Plan -> Build -> Verify
      |____________ Forge keeps it aligned _____|
 ```
 
+> **Evidence status**
+>
+> Forge includes an executable, isolated A/B benchmark for scope retention, debugging tunnel vision, context-loss recovery, and proportionality. The benchmark instrument is CI-self-tested, but **real with-Forge vs no-Forge performance results have not yet been published**. Forge does not claim effectiveness percentages without measured runs.
+
+## 10-second start
+
+From a project folder, start Claude Code and say:
+
+```text
+Use Forge from https://github.com/sultan-repo/forge to implement:
+
+[project scope]
+```
+
+No version number is required for normal use. Unless you explicitly request a release or commit, bootstrap resolves the latest published stable release at runtime and records the resolved identity when practical.
+
+Forge can load the methodology for the current session even when it was not preinstalled.
+
 ## Why Forge exists
 
 Long AI coding sessions often drift:
@@ -17,12 +38,25 @@ Long AI coding sessions often drift:
 - rough scope becomes code before requirements are mature
 - deep debugging becomes the new project
 - approved requirements disappear from later work
-- context compaction weakens the roadmap
+- context loss or compaction weakens the roadmap
 - workers return results based on stale assumptions
 - unrelated review findings hijack scope
 - tests pass while parts of the intended product were never built
 
 Forge adds a control layer so **local progress cannot silently replace the project objective**.
+
+## When to use Forge
+
+Forge is most useful when:
+
+- a project spans multiple milestones, sessions, or contributors
+- requirements are incomplete, ambiguous, or likely to evolve
+- debugging or research can derail later approved scope
+- multiple workers, agents, worktrees, or task systems may be involved
+- context loss, compaction, or handoff matters
+- completion must be checked against an approved product objective rather than only a passing test suite
+
+Forge intentionally stays lightweight for small reversible changes. If the task is simply “change this label and run the test,” Forge should behave accordingly.
 
 ## Typical AI coding vs Forge
 
@@ -35,30 +69,8 @@ Forge adds a control layer so **local progress cannot silently replace the proje
 | Requirements can disappear | Scope Conservation |
 | Worker context can go stale | Revision-aware reconciliation |
 | More agents can create more noise | Capability-aware orchestration |
-| Tests pass = "done" | Convergence checks the whole approved product |
+| Tests pass = “done” | Convergence checks the whole approved product |
 | Context loss blurs the roadmap | Durable state + resume orientation |
-
-## 10-second start
-
-From a project folder, start Claude Code and say:
-
-```text
-Use Forge from https://github.com/sultan-repo/forge to implement:
-
-[project scope]
-```
-
-No version number is required for normal use. Unless the user explicitly requests a release or commit, bootstrap resolves the latest published stable release at runtime and records the resolved identity when practical.
-
-Forge can load the methodology for the current session even when it was not preinstalled.
-
-### Bootstrap security
-
-A repository URL authorizes Forge to be **read**, not blindly executed. Forge bootstrap separates source selection, provenance verification, structural validation, installation, and activation.
-
-When verifiable immutable/versioned release provenance is available, Forge prefers it. Otherwise it pins the resolved commit and avoids executing downloaded repository scripts, using agent-controlled file operations instead.
-
-See [BOOTSTRAP.md](BOOTSTRAP.md).
 
 ## What Forge does
 
@@ -84,9 +96,9 @@ Forge treats initial scope as a starting point. Before significant work it can:
 - identify missing requirements
 - challenge weak assumptions
 - detect contradictions
-- surface edge cases/failure modes
+- surface edge cases and failure modes
 - recommend simpler or stronger approaches
-- identify relevant security/privacy/non-functional requirements
+- identify relevant security, privacy, and non-functional requirements
 - define invariants and acceptance scenarios
 - distinguish blocking decisions from safe assumptions
 - confirm a decision-ready requirements baseline
@@ -112,13 +124,16 @@ Did we actually build all of it?
 ```
 
 ### Requirements challenge
+
 Validates and enriches the rough scope before significant planning.
 
 ### Plan Consistency Gate
+
 Checks that requirements, invariants, architecture, milestones, Work Packets, dependencies, acceptance criteria, and validation agree before significant implementation.
 
 ### Convergence Gate
-At major closure, compares actual implementation/evidence back to the approved requirements and plan. Completing all tasks is not enough if approved product behavior is missing.
+
+At major closure, compares actual implementation and evidence back to the approved requirements and plan. Completing all tasks is not enough if approved product behavior is missing.
 
 ## The anti-tunnel-vision mechanism
 
@@ -137,11 +152,36 @@ M3
           continue master roadmap -> M4 -> M5
 ```
 
-See [the worked example](references/example-walkthrough.md) for actual control state, a Work Packet, a mid-packet discovery, Plan Delta, reconciliation, and post-compaction resume state.
+See [the worked example](references/example-walkthrough.md) for concrete control state, a Work Packet, a mid-packet discovery, Plan Delta, reconciliation, and resume state.
+
+## What Forge may add to your project
+
+Forge does **not** impose a universal project structure.
+
+For a small or low-risk task, it may add no persistent project-control files at all. For substantial projects using Control Mode, Forge may create or maintain a compact project-local control area such as:
+
+```text
+.claude/
+├── project-control.json        # optional durable project-control state
+└── hooks/ or control/          # optional lifecycle helpers when useful
+```
+
+Depending on project complexity and available Claude Code capabilities, durable state can track:
+
+- requirements and milestone mappings
+- active Work Packets
+- baseline and plan revisions
+- blocking detours, parents, and return targets
+- gate status and validation state
+- resume queue and reconciliation state
+
+Lifecycle hooks and helper scripts are optional. Forge should add only the control surface justified by the project.
+
+The bundled Python governance templates are conventional typed Python and are CI-checked with Ruff and strict mypy, so downstream repositories should not need blanket `.claude/` lint exclusions for Forge's own scripts.
 
 ## Forge and Claude Code built-ins
 
-Forge does not try to replace Claude Code's native capabilities. It supplies the project-control methodology that connects them.
+Forge does not replace Claude Code's native capabilities. It supplies the project-control methodology that connects them.
 
 | Native capability class | Forge adds |
 |---|---|
@@ -164,11 +204,18 @@ For substantial projects Forge can maintain revisioned project state, Work Packe
 
 When lifecycle hooks are available, Forge prefers a deterministic session-start orientation hook for Control Mode. Task-completion guards are optional and only apply when a native task lifecycle exists.
 
-The bundled Python governance templates are conventional typed Python and are CI-checked with Ruff and strict mypy so copying them into a downstream repository should not require blanket `.claude/` lint exclusions.
-
 See:
+
 - [scope and plan control](references/scope-and-plan-control.md)
 - [optional lifecycle hooks](references/optional-task-hooks.md)
+
+## Bootstrap security
+
+A repository URL authorizes Forge to be **read**, not blindly executed. Forge bootstrap separates source selection, provenance verification, structural validation, installation, and activation.
+
+When verifiable immutable/versioned release provenance is available, Forge prefers it. Otherwise it pins the resolved commit and avoids executing downloaded repository scripts, using agent-controlled file operations instead.
+
+See [BOOTSTRAP.md](BOOTSTRAP.md).
 
 ## Usage
 
@@ -193,13 +240,40 @@ Use Forge to adopt this existing repository and add ...
 
 Forge auto-invocation is intentionally limited to explicit Forge requests.
 
-## Install permanently
+## Install once
 
-```bash
-git clone https://github.com/sultan-repo/forge.git ~/.claude/skills/forge
+For normal use, prefer the latest verified stable release rather than cloning mutable `main` into your permanent skill directory.
+
+The easiest persistent install is to ask Claude Code:
+
+```text
+Use the latest stable Forge release from:
+https://github.com/sultan-repo/forge
+
+Verify the release and asset, then install Forge persistently for Claude Code.
 ```
 
-For stronger supply-chain assurance, prefer a verified immutable/versioned release when available. See [release guidance](docs/RELEASING.md).
+The preferred persistent location is:
+
+```text
+~/.claude/skills/forge/
+```
+
+For development or contributing to Forge itself, cloning `main` is appropriate:
+
+```bash
+git clone https://github.com/sultan-repo/forge.git
+```
+
+See [BOOTSTRAP.md](BOOTSTRAP.md) and [release guidance](docs/RELEASING.md) for provenance and fallback behavior.
+
+### Which Forge version gets used?
+
+- **Repository URL invocation:** bootstrap resolves the latest published stable release available at that time unless you explicitly request a version or commit.
+- **Already installed locally:** Claude Code uses the installed copy until you deliberately update it.
+- **Exact reproducibility:** specify an immutable release or commit when you need the same Forge identity across environments or experiments.
+
+Forge does not silently require every existing project to upgrade when a newer release appears.
 
 ## Evaluation status
 
@@ -240,15 +314,21 @@ forge/
 └── docs/
 ```
 
-Validate:
+Validate locally:
 
 ```bash
 python3 scripts/validate-skill-package.py
 ```
 
+## Development
+
+Changes to Forge should preserve proportionality and be driven by observed failures rather than by accumulating universal rules. Methodology changes should be benchmarked when practical; release engineering and template-quality changes should be covered by deterministic CI.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Version
 
-Current version: **1.7.0**
+Current version: **1.7.1**
 
 ## License
 
