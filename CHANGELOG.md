@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.6.0
+
+Evidence-first and capability-first hardening.
+
+- slims `SKILL.md` so the always-loaded control core stays compact and delegates detail to references
+- adds `references/example-walkthrough.md` with concrete control state, Work Packet, detour, Plan Delta, reconciliation, and resume example
+- adds `references/claude-code-integration.md` to position Forge as a control methodology over native capabilities rather than a replacement for them
+- makes capability detection a universal rule: no model-name, model-generation, fixed tool, or platform-version allowlists in Forge behavior
+- hardens remote bootstrap: separate source selection, provenance verification, structural validation, installation, and activation
+- forbids executing downloaded Forge scripts before source provenance is established
+- prefers immutable/versioned release verification when available, with exact-commit/no-script fallback
+- expands deterministic Control Mode guidance: session-start orientation preferred when lifecycle hooks exist; task completion guard only when a task lifecycle exists
+- adds optional `templates/task-completed-control.py`
+- updates hook example to include current session-start lifecycle cases while remaining capability-driven
+- adds empirical core benchmark protocol for scope retention, debugging tunnel vision, compaction recovery, and proportionality
+- explicitly distinguishes baseline testing from ablation testing
+- publishes no benchmark claims until real runs are recorded
+- adds MIT license
+- shortens and repositions README around value, built-in integration, safety, and evidence
+
 ## 1.5.0
 
 Adds one-prompt remote bootstrap and explicit-name natural-language invocation.
@@ -10,81 +30,25 @@ Adds one-prompt remote bootstrap and explicit-name natural-language invocation.
 - allows prompts such as `Use Forge from https://github.com/sultan-repo/forge to implement: ...`
 - requires remote bootstrap to keep Forge outside the product source tree
 - loads Forge directly in the bootstrap session so command-registration restart is not a blocker
-- documents Claude Code's live skill discovery caveat when the top-level skills directory did not exist at session start
 - hardens `scripts/install.sh` for direct-in-place installations
-- adds `evals/bootstrap-evals.json` with remote-bootstrap and installed natural-language invocation regressions
+- adds `evals/bootstrap-evals.json`
 
 ## 1.4.0
 
-Renames the skill and public command from **Project Execution** / `/project-execution` to **Forge** / `/forge`.
-
-- renames skill frontmatter to `forge`
-- renames package/install directory to `forge`
-- updates all command examples and internal references
-- updates behavioral eval identity to `forge`
-- updates structural validator identity/version
-- adds public-repository README with new-project, existing-project, resume, status, and review usage
-- adds `scripts/install.sh` for personal Claude Code installation
-- adds GitHub Actions package validation
-- adds contribution guidance and repository hygiene
-- preserves the v1.3 methodology and control model unchanged
-
-### Breaking command change
-
-Previous:
-
-```text
-/project-execution ...
-```
-
-Current:
-
-```text
-/forge ...
-```
+Renamed the skill and public command from **Project Execution** / `/project-execution` to **Forge** / `/forge`.
 
 ## 1.3.0
 
-Extends plan-control into the full intent-to-code lifecycle:
-
-- adds explicit invocation modes: `new`, `adopt/existing`, `continue/resume`, `review`, `status`, `help`
-- adds Plan Consistency Gate before significant implementation
-- adds Convergence Gate at major milestone/release/project closure
-- adds prompt-injection/untrusted retrieved-content trust boundary
-- adds review-finding scope triage separate from severity
-- adds capability-aware orchestration routing across main agent, subagents, isolated worktrees/sessions, agent teams, and batch/fan-out mechanisms
-- adds controller context-budget rule and compact worker return contracts
-- adds high-impact assumption checkpoint
-- adds Work Packet sizing/splitting criteria
-- adds large-codebase code-intelligence/orientation guidance
-- adds Plan Delta canonicalization/archive so current truth stays compact while history is preserved
-- adds important user-facing acceptance-scenario guidance
-- adds v3 project-control state with Plan Consistency/Convergence gate tracking
-- updates SessionStart orientation to include gate state
-- expands control validator for v3 state and stale gate warnings
-- adds `evals/evals.json` behavioral regression suite
-- adds structural package validator under `scripts/validate-skill-package.py`
+Added Plan Consistency, Convergence, trust boundaries, capability-aware orchestration, review triage, assumption checkpoints, Work Packet sizing, Plan Delta canonicalization, and behavioral evals.
 
 ## 1.2.0
 
-Hardens plan continuity and context recovery:
-
-- requires a small persistent Execution Control Kernel for Control Mode
-- closes the scope-disposition loophole: terminal status does not authorize scope removal
-- adds requirements-baseline and plan revisioning
-- adds stale-worker/subagent detection and reconcile-before-integration rule
-- replaces singular active milestone/packet with parallel-capable arrays and `resume_queue`
-- normalizes requirement/milestone/work-packet status enums
-- adds generic project-control JSON Schema and Python validator
-- adds optional SessionStart context injection for startup/resume/clear/compact
-- updates optional task-hook guidance
-- adds recoverable checkpoint guidance for risky exploration
-- trims the core SKILL.md and pushes deep mechanics into references/templates
+Hardened plan continuity, persistent execution control, revisioning, parallel work state, validation, and session reorientation.
 
 ## 1.1.0
 
-Added Scope Conservation, Work Packets, detours, Plan Deltas, reconciliation gates, requirement coverage, controller/worker separation, and optional Claude Tasks integration.
+Added Scope Conservation, Work Packets, detours, Plan Deltas, reconciliation gates, requirement coverage, and controller/worker separation.
 
 ## 1.0.0
 
-Initial universal forge skill.
+Initial universal project execution skill.
