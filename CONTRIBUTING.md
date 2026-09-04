@@ -1,31 +1,25 @@
 # Contributing to Forge
 
-Forge is a methodology skill, so changes should be driven by observed behavior rather than prompt expansion for its own sake.
+Forge is a methodology skill. Changes should be driven by observed behavior rather than prompt expansion for its own sake.
 
 ## Principles
 
-- Preserve proportionality. Tiny tasks must remain lightweight.
+- Preserve proportionality.
 - Prefer enforceable invariants over repeated prose when strict behavior matters.
-- Avoid fixed technology stacks, folder trees, or agent rosters.
-- Keep `SKILL.md` compact and move deep procedures into references.
-- New universal rules should address a demonstrated cross-project failure mode.
-- Do not weaken scope conservation, authority, trust boundaries, verification, or convergence.
-- Preserve the one-prompt remote-bootstrap path and explicit-name-only auto-invocation behavior.
+- Do not hardcode model names, model generations, platform versions, or temporary tool availability as policy.
+- Detect capabilities at runtime and provide graceful fallbacks.
+- Avoid fixed technology stacks, folder trees, and agent rosters.
+- Keep `SKILL.md` compact; put deep mechanics in references.
+- New universal rules should address demonstrated cross-project failure modes.
+- Preserve scope conservation, authority, trust boundaries, verification, and convergence.
+- Preserve safe remote-bootstrap behavior.
 
-## Before submitting a change
+## Before submitting a methodology change
 
-Run:
+1. run `python3 scripts/validate-skill-package.py`
+2. add/update a regression scenario when behavior changes
+3. for broad control changes, run the relevant core benchmarks
+4. compare baseline, current Forge, and candidate/ablation when removing or relocating rules
+5. record results rather than inferring improvement from prompt quality
 
-```bash
-python3 scripts/validate-skill-package.py
-```
-
-If the change affects behavior, add or update a regression scenario in `evals/evals.json`.
-
-Useful evaluation compares the same realistic project scenario:
-
-1. without Forge
-2. with the current Forge release
-3. with the proposed Forge change
-
-Prefer changes that improve correctness, adherence, or efficiency without creating unnecessary ceremony.
+See `evals/README.md`.
