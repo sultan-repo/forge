@@ -33,9 +33,9 @@ The default container image is built from `container/Containerfile`. It installs
 
 ```bash
 export ANTHROPIC_API_KEY=...
-./run.sh --runs 5
-FORGE_REF=v1.7.0 ./run.sh --runs 5
-CLAUDE_CODE_CHANNEL=<exact-version> ./run.sh --runs 5
+bash run.sh --runs 5
+FORGE_REF=v1.7.0 bash run.sh --runs 5
+CLAUDE_CODE_CHANNEL=<exact-version> bash run.sh --runs 5
 ```
 
 A normal 5-run matrix is 4 scenarios × 2 arms × 5 = 40 benchmark cells. B3 uses two fresh agent sessions per cell, so the number of Claude invocations is higher than the cell count.
@@ -119,13 +119,13 @@ Cells are paired by scenario/run so baseline and Forge happen close together. Wi
 Mock agents do not call Claude and bypass remote/container requirements. They validate fixture/scorer behavior only:
 
 ```bash
-BENCH_MOCK_AGENT=reference ./run.sh --conditions baseline --runs 1 --out /tmp/forge-ref
+BENCH_MOCK_AGENT=reference bash run.sh --conditions baseline --runs 1 --out /tmp/forge-ref
 python3 selftest.py /tmp/forge-ref --expect pass
 
-BENCH_MOCK_AGENT=noop ./run.sh --conditions baseline --runs 1 --out /tmp/forge-noop
+BENCH_MOCK_AGENT=noop bash run.sh --conditions baseline --runs 1 --out /tmp/forge-noop
 python3 selftest.py /tmp/forge-noop --expect fail
 
-BENCH_MOCK_AGENT=drifter ./run.sh --conditions baseline --runs 1 --out /tmp/forge-drift
+BENCH_MOCK_AGENT=drifter bash run.sh --conditions baseline --runs 1 --out /tmp/forge-drift
 python3 selftest.py /tmp/forge-drift --expect fail
 ```
 
@@ -142,12 +142,12 @@ The reference agent proves fixtures are satisfiable. No-op and drifting agents p
 ## Files
 
 ```text
-run.sh               matrix runner, isolation, provenance, activation preflight, evidence capture
-build_fixtures.py    materializes scenario repos from the compact bundle
-fixture_bundle.json  reference fixture, overlays, hidden tests, and prompts
-assert_run.py        deterministic scorer
-aggregate.py         REPORT.md generator
-selftest.py          validates expected mock outcomes
-mock_agent.py        reference/noop/drifter agents used only for harness self-tests
-container/           isolated real-agent runtime definition
+run.sh                         matrix runner, isolation, provenance, activation preflight, evidence capture
+build_fixtures.py              materializes scenario repos from the compact bundle
+fixture_bundle.json.gz.b64     compressed reference fixture, overlays, hidden tests, and prompts
+assert_run.py                  deterministic scorer
+aggregate.py                   REPORT.md generator
+selftest.py                    validates expected mock outcomes
+mock_agent.py                  reference/noop/drifter agents used only for harness self-tests
+container/                     isolated real-agent runtime definition
 ```
