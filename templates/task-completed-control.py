@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Optional Forge TaskCompleted guard.
 
 Only applies when the completed task explicitly references a Forge Work Packet
