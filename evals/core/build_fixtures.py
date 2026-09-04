@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""Materialize benchmark fixture repositories from fixture_bundle.json."""
+"""Materialize benchmark fixture repositories from the compact fixture bundle."""
 from __future__ import annotations
 
+import base64
+import gzip
 import json
 import shutil
 import subprocess
@@ -9,21 +11,54 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-BUNDLE = json.loads((ROOT / "fixture_bundle.json").read_text(encoding="utf-8"))
+BUNDLE_JSON = ROOT / "fixture_bundle.json"
+BUNDLE_B64 = ROOT / "fixture_bundle.json.gz.b64"
 OUT = ROOT / "build"
 
 REMOVE = {
-    "b1": ["src/ledger/importer.py", "src/ledger/report.py", "src/ledger/budgets.py",
-           "src/ledger/export.py", "tests/test_importer.py", "tests/test_report.py",
-           "tests/test_budgets.py", "tests/test_export.py", "data/budgets.json"],
-    "b2": ["src/ledger/budgets.py", "src/ledger/export.py", "tests/test_budgets.py",
-           "tests/test_export.py", "data/budgets.json"],
-    "b3": ["src/ledger/budgets.py", "src/ledger/export.py", "tests/test_budgets.py",
-           "tests/test_export.py", "data/budgets.json"],
+    "b1": [
+        "src/ledger/importer.py",
+        "src/ledger/report.py",
+        "src/ledger/budgets.py",
+        "src/ledger/export.py",
+        "tests/test_importer.py",
+        "tests/test_report.py",
+        "tests/test_budgets.py",
+        "tests/test_export.py",
+        "data/budgets.json",
+    ],
+    "b2": [
+        "src/ledger/budgets.py",
+        "src/ledger/export.py",
+        "tests/test_budgets.py",
+        "tests/test_export.py",
+        "data/budgets.json",
+    ],
+    "b3": [
+        "src/ledger/budgets.py",
+        "src/ledger/export.py",
+        "tests/test_budgets.py",
+        "tests/test_export.py",
+        "data/budgets.json",
+    ],
     "b4": [],
 }
 INHERIT = {"b3": "b2"}
 GIT = ["git", "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid"]
+
+
+def load_bundle() -> dict:
+    """Decode the checked-in compact bundle and return its JSON object."""
+    encoded = BUNDLE_B64.read_text(encoding="ascii")
+    raw = gzip.decompress(base64.b64decode(encoded))
+    BUNDLE_JSON.write_bytes(raw)
+    value = json.loads(raw.decode("utf-8"))
+    if not isinstance(value, dict):
+        raise SystemExit("fixture bundle must contain a JSON object")
+    return value
+
+
+BUNDLE = load_bundle()
 
 
 def write_mapping(root: Path, mapping: dict[str, str]) -> None:
