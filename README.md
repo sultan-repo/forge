@@ -48,11 +48,13 @@ Use Forge from https://github.com/sultan-repo/forge to implement:
 [project scope]
 ```
 
+No version number is required for normal use. Unless the user explicitly requests a release or commit, bootstrap resolves the latest published stable release at runtime and records the resolved identity when practical.
+
 Forge can load the methodology for the current session even when it was not preinstalled.
 
 ### Bootstrap security
 
-A repository URL authorizes Forge to be **read**, not blindly executed. Forge v1.6 separates source selection, provenance verification, structural validation, installation, and activation.
+A repository URL authorizes Forge to be **read**, not blindly executed. Forge bootstrap separates source selection, provenance verification, structural validation, installation, and activation.
 
 When verifiable immutable/versioned release provenance is available, Forge prefers it. Otherwise it pins the resolved commit and avoids executing downloaded repository scripts, using agent-controlled file operations instead.
 
@@ -241,7 +243,7 @@ python3 scripts/validate-skill-package.py
 
 ## Version
 
-Current version: **1.6.0**
+Current version: **1.6.1**
 
 ## License
 
