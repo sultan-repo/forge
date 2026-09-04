@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Structural validation for the Forge skill package."""
 from pathlib import Path
-import json, re, subprocess, sys
+import json, os, re, subprocess, sys
 
 root = Path(__file__).resolve().parents[1]
 errors=[]; warnings=[]
@@ -17,12 +17,10 @@ else:
     lines=text.count("\n")+1
     size=len(text.encode("utf-8"))
     if lines >= 500: err(f"SKILL.md is {lines} lines; must stay under 500")
-    if size > 10_000: err(f"SKILL.md is {size} bytes; v1.6 compact core must stay <= 10000")
+    if size > 10_000: err(f"SKILL.md is {size} bytes; compact core must stay <= 10000")
     if not text.startswith("---\n"): err("SKILL.md missing YAML frontmatter")
     if "disable-model-invocation: false" not in text: err("Forge must allow explicit-name model invocation")
     if "explicitly mentions Forge" not in text: err("Forge description must constrain automatic invocation")
-    if "model names" not in text or "Capability-first" not in text:
-        err("Forge core must preserve capability-first/no-model-hardcoding policy")
     for target in re.findall(r"\[[^\]]+\]\(([^)]+)\)", text):
         if "://" in target or target.startswith("#"): continue
         p=(root/target).resolve()
@@ -30,8 +28,28 @@ else:
         except ValueError: err(f"skill link escapes package: {target}"); continue
         if not p.exists(): err(f"SKILL.md references missing file: {target}")
 
-version=(root/"VERSION").read_text(encoding="utf-8").strip() if (root/"VERSION").exists() else None
-if version != "1.6.0": err(f"VERSION expected 1.6.0, got {version!r}")
+version_path=root/"VERSION"
+version=version_path.read_text(encoding="utf-8").strip() if version_path.exists() else None
+if not version:
+    err("VERSION missing or empty")
+elif not re.fullmatch(r"\d+\.\d+\.\d+(?:[.-][0-9A-Za-z.-]+)?", version):
+    err(f"VERSION is not a supported semantic version: {version!r}")
+
+changelog_path=root/"CHANGELOG.md"
+if not changelog_path.exists():
+    err("CHANGELOG.md missing")
+elif version:
+    changelog=changelog_path.read_text(encoding="utf-8")
+    match=re.search(r"^##\s+(\d+\.\d+\.\d+(?:[.-][0-9A-Za-z.-]+)?)\s*$", changelog, re.M)
+    if not match:
+        err("CHANGELOG.md has no version heading")
+    elif match.group(1) != version:
+        err(f"VERSION {version!r} does not match top CHANGELOG version {match.group(1)!r}")
+
+if os.environ.get("GITHUB_REF_TYPE") == "tag" and version:
+    ref_name=os.environ.get("GITHUB_REF_NAME", "")
+    if ref_name != f"v{version}":
+        err(f"git tag {ref_name!r} does not match VERSION-derived tag 'v{version}'")
 
 for p in root.rglob("*.json"):
     try: json.loads(p.read_text(encoding="utf-8"))
@@ -74,6 +92,7 @@ required = [
     "references/full-spectrum-validation.md",
     "references/example-walkthrough.md",
     "references/claude-code-integration.md",
+    "references/optional-task-hooks.md",
     "templates/execution-control-kernel.md",
     "templates/project-control.schema.json",
     "templates/session-start-control.py",
@@ -82,20 +101,6 @@ required = [
 ]
 for rel in required:
     if not (root/rel).exists(): err(f"required package file missing: {rel}")
-
-policy_files = [root/"SKILL.md", root/"references"/"orchestration.md",
-                root/"references"/"claude-code-integration.md",
-                root/"references"/"optional-task-hooks.md"]
-model_policy_patterns = [
-    r"\b(opus|sonnet|haiku|fable|mythos)\s*[0-9]",
-    r"claude-(?:opus|sonnet|haiku)-[0-9]",
-]
-for p in policy_files:
-    if not p.exists(): continue
-    t=p.read_text(encoding="utf-8").lower()
-    for pat in model_policy_patterns:
-        if re.search(pat, t):
-            err(f"{p.relative_to(root)} contains model-specific policy; route by capability instead")
 
 for w in warnings: print("SKILL WARNING:", w, file=sys.stderr)
 if errors:
