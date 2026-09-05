@@ -2,12 +2,12 @@
 """Deterministic mock agents used only to self-test the benchmark instrument."""
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-BUNDLE = json.loads((HERE / "fixture_bundle.json").read_text(encoding="utf-8"))
+from fixture_bundle import load_bundle
+
+BUNDLE = load_bundle()
 FULL = BUNDLE["full"]
 
 

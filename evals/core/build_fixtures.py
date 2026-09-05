@@ -2,17 +2,14 @@
 """Materialize benchmark fixture repositories from the compact fixture bundle."""
 from __future__ import annotations
 
-import base64
-import gzip
-import json
+import argparse
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
+from fixture_bundle import load_bundle
+
 ROOT = Path(__file__).resolve().parent
-BUNDLE_JSON = ROOT / "fixture_bundle.json"
-BUNDLE_B64 = ROOT / "fixture_bundle.json.gz.b64"
 OUT = ROOT / "build"
 
 REMOVE = {
@@ -44,18 +41,8 @@ REMOVE = {
     "b4": [],
 }
 INHERIT = {"b3": "b2"}
-GIT = ["git", "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid"]
-
-
-def load_bundle() -> dict:
-    """Decode the checked-in compact bundle and return its JSON object."""
-    encoded = BUNDLE_B64.read_text(encoding="ascii")
-    raw = gzip.decompress(base64.b64decode(encoded))
-    BUNDLE_JSON.write_bytes(raw)
-    value = json.loads(raw.decode("utf-8"))
-    if not isinstance(value, dict):
-        raise SystemExit("fixture bundle must contain a JSON object")
-    return value
+GIT = ["git", "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid",
+       "-c", "commit.gpgSign=false", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"]
 
 
 BUNDLE = load_bundle()
@@ -68,10 +55,10 @@ def write_mapping(root: Path, mapping: dict[str, str]) -> None:
         path.write_text(content, encoding="utf-8")
 
 
-def build(name: str) -> Path:
+def build(name: str, out: Path = OUT) -> Path:
     if name not in REMOVE:
         raise SystemExit(f"unknown fixture: {name}")
-    dest = OUT / name
+    dest = out / name
     shutil.rmtree(dest, ignore_errors=True)
     dest.mkdir(parents=True)
     write_mapping(dest, BUNDLE["full"])
@@ -88,5 +75,9 @@ def build(name: str) -> Path:
 
 
 if __name__ == "__main__":
-    for scenario in (sys.argv[1:] or list(REMOVE)):
-        print("built", build(scenario))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("scenarios", nargs="*")
+    parser.add_argument("--out", type=Path, default=OUT)
+    args = parser.parse_args()
+    for scenario in (args.scenarios or list(REMOVE)):
+        print("built", build(scenario, args.out))

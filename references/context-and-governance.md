@@ -112,7 +112,7 @@ If Claude appears to ignore instructions, verify what actually loaded before ass
 - configuration errors/conflicts
 
 
-## v1.2 Control Mode persistence
+## Control Mode persistence
 
 For Control Mode, do not rely on the manually invoked personal skill to be present in every future session.
 

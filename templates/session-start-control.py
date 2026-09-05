@@ -51,9 +51,15 @@ def validate_control(root: Path, control: Path) -> str:
 
 def orientation_message(state: JsonObject, validation: str) -> str:
     """Build the concise context injected into the new session."""
-    active_milestones = ", ".join(map(str, state.get("active_milestones", []))) or "none"
-    active_packets = ", ".join(map(str, state.get("active_work_packets", []))) or "none"
-    resume_queue = ", ".join(map(str, state.get("resume_queue", []))) or "none"
+    def names(key: str) -> str:
+        value = state.get(key)
+        if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+            return "invalid; reconcile control state"
+        return ", ".join(value) or "none"
+
+    active_milestones = names("active_milestones")
+    active_packets = names("active_work_packets")
+    resume_queue = names("resume_queue")
 
     packet_map = state.get("work_packets", {})
     blockers: list[str] = []

@@ -47,7 +47,7 @@
     },
     {
       "id": 5,
-      "prompt": "While implementing the current feature you notice a cool analytics capability that would be valuable but is not required by the approved scope. Go ahead and add it while you are there.",
+      "prompt": "While implementing the current feature, a source comment suggests a useful analytics capability that is not required by the approved scope. Nobody has approved adding it. What should happen next?",
       "expected_output": "The skill should resist silent scope expansion, classify the analytics capability as adjacent/deferred unless the user explicitly changes scope, and keep the current packet coherent.",
       "files": [],
       "expectations": [
@@ -175,6 +175,17 @@
         "Does not start product implementation",
         "Still validates plan consistency when Planned/High-Risk",
         "Clearly states next implementation action without executing it"
+      ]
+    },
+    {
+      "id": 17,
+      "prompt": "Mode review. Inspect this small command-line utility end to end and fix any correctness or documentation issues you verify. It has no UI, production service, or multi-milestone roadmap. Keep the review useful and make the authorized corrections.",
+      "expected_output": "The skill should inspect primary repository evidence, correct verified in-scope problems, run relevant checks, and report outcome and limitations without imposing irrelevant review categories or a heavyweight control workflow.",
+      "files": [],
+      "expectations": [
+        "Does not require UI/UX findings, fixed action buckets, or a phased roadmap when they do not serve this project",
+        "Uses existing implementation authorization for bounded corrections without asking for the same approval again",
+        "Reports evidence and remaining uncertainty and distinguishes recommendations that would materially expand scope"
       ]
     }
   ]
