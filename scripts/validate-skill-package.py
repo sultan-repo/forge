@@ -136,10 +136,14 @@ required = [
     "evals/core/build_fixtures.py",
     "evals/core/fixture_bundle.json.gz.b64",
     "evals/core/assert_run.py",
+    "evals/core/score_entrypoint.py",
     "evals/core/aggregate.py",
     "evals/core/selftest.py",
     "evals/core/mock_agent.py",
     "evals/core/container/Containerfile",
+    "evals/core/container/ScorerContainerfile",
+    "tests/test_dual_agent_runner.py",
+    "tests/test_benchmark_isolation.py",
     "references/requirements.md",
     "references/architecture-and-structure.md",
     "references/scope-and-plan-control.md",
@@ -208,9 +212,12 @@ python_files = [
     root / "scripts" / "adapters" / "codex_cli.py",
     root / "evals" / "core" / "build_fixtures.py",
     root / "evals" / "core" / "assert_run.py",
+    root / "evals" / "core" / "score_entrypoint.py",
     root / "evals" / "core" / "aggregate.py",
     root / "evals" / "core" / "selftest.py",
     root / "evals" / "core" / "mock_agent.py",
+    root / "tests" / "test_dual_agent_runner.py",
+    root / "tests" / "test_benchmark_isolation.py",
 ]
 for path in python_files:
     if not path.exists():
