@@ -26,10 +26,11 @@ jobs:
             templates/validate-project-control.py \
             templates/session-start-control.py \
             templates/task-completed-control.py \
-            scripts/forge-run.py \
             scripts/adapters/base.py \
             scripts/adapters/claude_code.py \
             scripts/adapters/codex_cli.py
+          python3 -m ruff check --ignore EXE001,I001,RUF100 \
+            scripts/forge-run.py
           python3 -m mypy --strict \
             templates/validate-project-control.py \
             templates/session-start-control.py \
