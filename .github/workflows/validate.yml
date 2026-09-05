@@ -8,19 +8,66 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: forge-validate-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  validate:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      dual_agent: ${{ steps.filter.outputs.dual_agent }}
+      benchmark: ${{ steps.filter.outputs.benchmark }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: filter
+        name: Detect expensive test paths
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            echo "dual_agent=true" >> "$GITHUB_OUTPUT"
+            echo "benchmark=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git diff --name-only \
+            "${{ github.event.pull_request.base.sha }}" \
+            "${{ github.event.pull_request.head.sha }}" > /tmp/forge-changed-files.txt
+
+          if grep -Eq '^(scripts/forge-run\.py|scripts/forge$|scripts/adapters/|templates/(execution-profile|implementation-handoff|review-result|project-control|session-start-control|task-completed-control)|tests/test_dual_agent_runner\.py|\.github/workflows/validate\.yml|scripts/validate-skill-package\.py)' /tmp/forge-changed-files.txt; then
+            echo "dual_agent=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "dual_agent=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          if grep -Eq '^(evals/core/|tests/test_benchmark_isolation\.py|\.github/workflows/validate\.yml|scripts/validate-skill-package\.py)' /tmp/forge-changed-files.txt; then
+            echo "benchmark=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "benchmark=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  static-checks:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - name: Install validation tools
-        run: python3 -m pip install --disable-pip-version-check pytest ruff mypy
+      - name: Cache Python packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: forge-pip-${{ runner.os }}-py312-static-${{ hashFiles('.github/workflows/validate.yml') }}
+          restore-keys: |
+            forge-pip-${{ runner.os }}-py312-static-
+            forge-pip-${{ runner.os }}-py312-
+      - name: Install static validation tools
+        run: python3 -m pip install --disable-pip-version-check ruff mypy
       - name: Validate skill package
         run: python3 scripts/validate-skill-package.py
-      - name: Lint and type-check Forge Python
+      - name: Lint Forge Python
         run: |
           python3 -m ruff check \
             templates/validate-project-control.py \
@@ -33,6 +80,8 @@ jobs:
             tests/test_benchmark_isolation.py
           python3 -m ruff check --ignore EXE001,I001,RUF100,F401,UP035 \
             scripts/forge-run.py
+      - name: Strict type-check Forge Python
+        run: |
           python3 -m mypy --strict \
             templates/validate-project-control.py \
             templates/session-start-control.py \
@@ -41,14 +90,48 @@ jobs:
             scripts/adapters/claude_code.py \
             scripts/adapters/codex_cli.py \
             scripts/forge-run.py
+
+  dual-agent-tests:
+    needs: changes
+    if: needs.changes.outputs.dual_agent == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Cache Python packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: forge-pip-${{ runner.os }}-py312-pytest-${{ hashFiles('.github/workflows/validate.yml') }}
+          restore-keys: |
+            forge-pip-${{ runner.os }}-py312-pytest-
+            forge-pip-${{ runner.os }}-py312-
+      - name: Install test tools
+        run: python3 -m pip install --disable-pip-version-check pytest
       - name: Test dual-agent runner contracts
         run: python3 -m pytest -q tests/test_dual_agent_runner.py
-      - name: Build isolated benchmark scorer
-        run: docker build -t forge-bench-scorer:ci -f evals/core/container/ScorerContainerfile evals/core
-      - name: Test benchmark scorer isolation
-        env:
-          BENCH_SCORER_IMAGE: forge-bench-scorer:ci
-        run: python3 -m pytest -q tests/test_benchmark_isolation.py
+
+  benchmark-selftests:
+    needs: changes
+    if: needs.changes.outputs.benchmark == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Cache Python packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: forge-pip-${{ runner.os }}-py312-pytest-${{ hashFiles('.github/workflows/validate.yml') }}
+          restore-keys: |
+            forge-pip-${{ runner.os }}-py312-pytest-
+            forge-pip-${{ runner.os }}-py312-
+      - name: Install benchmark test tools
+        run: python3 -m pip install --disable-pip-version-check pytest
       - name: Self-test executable benchmark instrument
         run: |
           BENCH_MOCK_AGENT=reference bash evals/core/run.sh --conditions baseline --runs 1 --out /tmp/forge-bench-reference
@@ -57,3 +140,61 @@ jobs:
           python3 evals/core/selftest.py /tmp/forge-bench-noop --expect fail
           BENCH_MOCK_AGENT=drifter bash evals/core/run.sh --conditions baseline --runs 1 --out /tmp/forge-bench-drifter
           python3 evals/core/selftest.py /tmp/forge-bench-drifter --expect fail
+
+  benchmark-isolation:
+    needs: changes
+    if: needs.changes.outputs.benchmark == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Cache Python packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: forge-pip-${{ runner.os }}-py312-pytest-${{ hashFiles('.github/workflows/validate.yml') }}
+          restore-keys: |
+            forge-pip-${{ runner.os }}-py312-pytest-
+            forge-pip-${{ runner.os }}-py312-
+      - name: Install isolation test tools
+        run: python3 -m pip install --disable-pip-version-check pytest
+      - uses: docker/setup-buildx-action@v3
+      - name: Build cached isolated benchmark scorer
+        uses: docker/build-push-action@v6
+        with:
+          context: evals/core
+          file: evals/core/container/ScorerContainerfile
+          load: true
+          tags: forge-bench-scorer:ci
+          cache-from: type=gha,scope=forge-benchmark-scorer
+          cache-to: type=gha,mode=max,scope=forge-benchmark-scorer
+      - name: Test benchmark scorer isolation
+        env:
+          BENCH_SCORER_IMAGE: forge-bench-scorer:ci
+        run: python3 -m pytest -q tests/test_benchmark_isolation.py
+
+  validation-gate:
+    if: always()
+    needs:
+      - static-checks
+      - dual-agent-tests
+      - benchmark-selftests
+      - benchmark-isolation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all applicable validation jobs
+        env:
+          STATIC: ${{ needs.static-checks.result }}
+          DUAL_AGENT: ${{ needs.dual-agent-tests.result }}
+          BENCHMARK_SELFTESTS: ${{ needs.benchmark-selftests.result }}
+          BENCHMARK_ISOLATION: ${{ needs.benchmark-isolation.result }}
+        run: |
+          for result in "$STATIC" "$DUAL_AGENT" "$BENCHMARK_SELFTESTS" "$BENCHMARK_ISOLATION"; do
+            if [[ "$result" != "success" && "$result" != "skipped" ]]; then
+              echo "Validation dependency failed: $result" >&2
+              exit 1
+            fi
+          done
+          echo "All applicable Forge validation jobs passed."
