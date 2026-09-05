@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Forge Implementation Handoff",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "packet_id",
+    "baseline_revision",
+    "plan_revision",
+    "base_commit",
+    "implementation_commit",
+    "cycle",
+    "files_changed",
+    "status"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "packet_id": {"type": "string", "minLength": 1},
+    "baseline_revision": {"type": "integer", "minimum": 1},
+    "plan_revision": {"type": "integer", "minimum": 1},
+    "base_commit": {"type": "string", "minLength": 7},
+    "implementation_commit": {"type": "string", "minLength": 7},
+    "cycle": {"type": "integer", "minimum": 1},
+    "files_changed": {"type": "array", "items": {"type": "string"}},
+    "acceptance_results": {
+      "type": "object",
+      "additionalProperties": {"type": "string"}
+    },
+    "validation": {
+      "type": "array",
+      "items": {"type": "object", "additionalProperties": true}
+    },
+    "discoveries": {
+      "type": "array",
+      "items": {"type": "object", "additionalProperties": true}
+    },
+    "known_uncertainties": {"type": "array", "items": {"type": "string"}},
+    "status": {"const": "READY_FOR_REVIEW"}
+  }
+}

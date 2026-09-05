@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Executable Forge benchmark runner.
-# Real benchmark runs are fail-closed on three boundaries:
+# Real benchmark runs are fail-closed on four boundaries:
 #   1) verified immutable Forge release provenance
-#   2) container isolation from scorer/hidden tests/other runs
-#   3) Forge activation preflight before any Forge-arm cell is accepted
+#   2) agent isolation from scorer/hidden tests/other runs
+#   3) isolated no-network scoring for all agent-modified code
+#   4) Forge activation preflight before any Forge-arm cell is accepted
 #
-# Mock agents bypass remote/container requirements and are for harness self-tests only.
+# Mock agents are trusted checked-in harness code and may use local scoring for self-tests only.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -43,6 +44,7 @@ done
 : "${FORGE_REPO:=sultan-repo/forge}"
 : "${BENCH_SEED:=1701}"
 : "${BENCH_AGENT_IMAGE:=forge-bench-agent:stable}"
+: "${BENCH_SCORER_IMAGE:=forge-bench-scorer:stable}"
 : "${CLAUDE_CODE_CHANNEL:=stable}"
 
 OUT="${OUT:-results/$(date -u +%Y%m%dT%H%M%SZ)}"
@@ -180,6 +182,7 @@ PY
 
 CONTAINER_RUNTIME=""
 CONTAINER_IMAGE_ID=""
+SCORER_IMAGE_ID=""
 AGENT_DESC=""
 ensure_container() {
   [[ "$MOCK" == false ]] || return 0
@@ -190,7 +193,7 @@ ensure_container() {
   elif command -v podman >/dev/null 2>&1; then
     CONTAINER_RUNTIME=podman
   else
-    echo "Real benchmark runs require Docker or Podman so the agent cannot read hidden tests, scorer code, or other runs." >&2
+    echo "Real benchmark runs require Docker or Podman for both agent and scoring isolation." >&2
     exit 2
   fi
   "$CONTAINER_RUNTIME" info >/dev/null 2>&1 || {
@@ -202,10 +205,19 @@ ensure_container() {
       --build-arg "CLAUDE_CODE_CHANNEL=$CLAUDE_CODE_CHANNEL" \
       -t "$BENCH_AGENT_IMAGE" -f container/Containerfile .
   fi
+  if ! "$CONTAINER_RUNTIME" image inspect "$BENCH_SCORER_IMAGE" >/dev/null 2>&1; then
+    "$CONTAINER_RUNTIME" build \
+      -t "$BENCH_SCORER_IMAGE" -f container/ScorerContainerfile .
+  fi
   CONTAINER_IMAGE_ID="$("$CONTAINER_RUNTIME" image inspect "$BENCH_AGENT_IMAGE" --format '{{.Id}}' 2>/dev/null || true)"
+  SCORER_IMAGE_ID="$("$CONTAINER_RUNTIME" image inspect "$BENCH_SCORER_IMAGE" --format '{{.Id}}' 2>/dev/null || true)"
   AGENT_DESC="$("$CONTAINER_RUNTIME" run --rm "$BENCH_AGENT_IMAGE" claude --version 2>/dev/null | head -1)"
   [[ -n "$AGENT_DESC" ]] || {
     echo "Benchmark agent image does not expose a working 'claude' executable." >&2
+    exit 2
+  }
+  [[ -n "$SCORER_IMAGE_ID" ]] || {
+    echo "Benchmark scorer image could not be resolved." >&2
     exit 2
   }
 }
@@ -335,6 +347,108 @@ except KeyError as exc:
 PY
 }
 
+# Any Git command after an agent may execute repository-controlled helpers.
+# Real runs therefore execute those commands inside the isolated scorer image.
+bench_git() {
+  local repo="$1"
+  shift
+  if [[ "$MOCK" == true ]]; then
+    git -C "$repo" -c core.hooksPath=/dev/null -c core.fsmonitor=false "$@"
+    return
+  fi
+  "$CONTAINER_RUNTIME" run --rm \
+    --network none \
+    --read-only \
+    --cap-drop ALL \
+    --security-opt no-new-privileges \
+    --user "$(id -u):$(id -g)" \
+    --tmpfs /tmp:rw,nosuid,nodev,size=64m,mode=1777 \
+    -e HOME=/tmp \
+    -v "$repo:/workspace:rw" \
+    -w /workspace \
+    "$BENCH_SCORER_IMAGE" \
+    git -c safe.directory=/workspace -c core.hooksPath=/dev/null -c core.fsmonitor=false "$@"
+}
+
+print_score_progress() {
+  local path="$1" phase="$2"
+  python3 - "$path" "$phase" <<'PY'
+import json
+import pathlib
+import sys
+
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+phase = sys.argv[2]
+print(
+    f"[{payload.get('scenario')}/{payload.get('condition')}/{phase}/run-{payload.get('run')}] "
+    f"{'PASS' if payload.get('pass') else 'FAIL'} {payload.get('failed_assertions', [])}"
+)
+PY
+}
+
+score_assertion() {
+  local phase="$1" scenario="$2" repo="$3" meta="$4" transcript="$5" out="$6"
+  local stage1_transcript="${7:-}" stage1_result="${8:-}"
+  if [[ "$MOCK" == true ]]; then
+    local -a cmd
+    cmd=(python3 "$HERE/assert_run.py" --phase "$phase" --scenario "$scenario" --repo "$repo" --meta "$meta" --transcript "$transcript" --out "$out")
+    [[ -n "$stage1_transcript" ]] && cmd+=(--stage1-transcript "$stage1_transcript")
+    [[ -n "$stage1_result" ]] && cmd+=(--stage1-result "$stage1_result")
+    "${cmd[@]}" | tee -a "$OUT/progress.log"
+    return
+  fi
+
+  local tmp_out="$out.tmp"
+  local -a mounts args
+  mounts=(
+    -v "$repo:/input:ro"
+    -v "$meta:/evidence/meta.json:ro"
+    -v "$transcript:/evidence/transcript.jsonl:ro"
+  )
+  args=(
+    python3 /scorer/score_entrypoint.py
+    --phase "$phase"
+    --scenario "$scenario"
+    --meta /evidence/meta.json
+    --transcript /evidence/transcript.jsonl
+  )
+  if [[ -n "$stage1_transcript" ]]; then
+    mounts+=(-v "$stage1_transcript:/evidence/stage1-transcript.jsonl:ro")
+    args+=(--stage1-transcript /evidence/stage1-transcript.jsonl)
+  fi
+  if [[ -n "$stage1_result" ]]; then
+    mounts+=(-v "$stage1_result:/evidence/stage1-result.json:ro")
+    args+=(--stage1-result /evidence/stage1-result.json)
+  fi
+
+  "$CONTAINER_RUNTIME" run --rm \
+    --network none \
+    --read-only \
+    --cap-drop ALL \
+    --security-opt no-new-privileges \
+    --pids-limit 128 \
+    --memory 768m \
+    --cpus 1 \
+    --tmpfs /work:rw,nosuid,nodev,size=512m,mode=1777 \
+    --tmpfs /tmp:rw,nosuid,nodev,size=256m,mode=1777 \
+    "${mounts[@]}" \
+    "$BENCH_SCORER_IMAGE" \
+    "${args[@]}" >"$tmp_out"
+
+  python3 - "$tmp_out" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+payload = json.loads(path.read_text(encoding="utf-8"))
+if not isinstance(payload, dict) or "pass" not in payload or "scenario" not in payload:
+    raise SystemExit("isolated scorer returned an invalid result")
+PY
+  mv "$tmp_out" "$out"
+  print_score_progress "$out" "$phase" | tee -a "$OUT/progress.log"
+}
+
 prepare_forge
 ensure_container
 python3 build_fixtures.py >/dev/null
@@ -347,7 +461,7 @@ fi
 
 export OUT FORGE_TAG FORGE_VERSION FORGE_COMMIT FORGE_ASSET_SHA256 FORGE_VERIFIED FORGE_PROVENANCE
 export AGENT_DESC CLAUDE_MODEL MAX_TURNS AGENT_TIMEOUT FORGE_INVOCATION SCENARIOS CONDITIONS RUNS BENCH_SEED
-export CONTAINER_RUNTIME CONTAINER_IMAGE_ID BENCH_AGENT_IMAGE MOCK
+export CONTAINER_RUNTIME CONTAINER_IMAGE_ID SCORER_IMAGE_ID BENCH_AGENT_IMAGE BENCH_SCORER_IMAGE MOCK
 python3 - <<'PY'
 import datetime
 import json
@@ -355,6 +469,7 @@ import os
 import pathlib
 
 path = pathlib.Path(os.environ["OUT"]) / "MANIFEST.json"
+mock = os.environ.get("MOCK") == "true"
 obj = {
     "started_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     "forge_ref": os.environ.get("FORGE_TAG"),
@@ -372,11 +487,14 @@ obj = {
     "conditions": os.environ.get("CONDITIONS"),
     "runs_per_cell": int(os.environ["RUNS"]),
     "seed": int(os.environ["BENCH_SEED"]),
-    "mock": os.environ.get("MOCK") == "true",
-    "isolation": "mock-local" if os.environ.get("MOCK") == "true" else "container",
+    "mock": mock,
+    "isolation": "mock-local-trusted" if mock else "agent-container+isolated-scorer-container",
     "container_runtime": os.environ.get("CONTAINER_RUNTIME"),
-    "container_image": os.environ.get("BENCH_AGENT_IMAGE"),
-    "container_image_id": os.environ.get("CONTAINER_IMAGE_ID"),
+    "agent_container_image": os.environ.get("BENCH_AGENT_IMAGE"),
+    "agent_container_image_id": os.environ.get("CONTAINER_IMAGE_ID"),
+    "scorer_container_image": os.environ.get("BENCH_SCORER_IMAGE"),
+    "scorer_container_image_id": os.environ.get("SCORER_IMAGE_ID"),
+    "scorer_network": "not-applicable" if mock else "none",
     "b3_boundary": "fresh-config-second-session",
 }
 path.write_text(json.dumps(obj, indent=2) + "\n", encoding="utf-8")
@@ -407,12 +525,13 @@ PY
 
 commit_and_capture() {
   local repo="$1" base="$2" outdir="$3"
-  (cd "$repo" && git add -A >/dev/null 2>&1 && git -c user.name=bench -c user.email=b@x commit -q -m "agent output" --allow-empty >/dev/null 2>&1)
+  bench_git "$repo" add -A >/dev/null 2>&1
+  bench_git "$repo" -c user.name=bench -c user.email=b@x commit -q -m "agent output" --allow-empty >/dev/null 2>&1
   local final
-  final="$(git -C "$repo" rev-parse HEAD)"
-  git -C "$repo" diff --stat "$base" "$final" >"$outdir/diffstat.txt" 2>/dev/null || true
-  git -C "$repo" diff "$base" "$final" >"$outdir/full.diff" 2>/dev/null || true
-  git -C "$repo" reset -q --soft "$base"
+  final="$(bench_git "$repo" rev-parse HEAD)"
+  bench_git "$repo" --no-pager diff --no-ext-diff --stat "$base" "$final" >"$outdir/diffstat.txt" 2>/dev/null || true
+  bench_git "$repo" --no-pager diff --no-ext-diff "$base" "$final" >"$outdir/full.diff" 2>/dev/null || true
+  bench_git "$repo" reset -q --soft "$base"
 }
 
 write_final_meta() {
@@ -456,10 +575,10 @@ run_one() {
     [[ "$condition" == forge ]] && prompt="$FORGE_INVOCATION
 $prompt"
     run_agent "$scenario" "$condition" stage1 "$repo" "$cfg1" "$prompt" "$stage1_dir"
-    python3 assert_run.py --phase stage1 --scenario b3 --repo "$repo" --meta "$stage1_dir/meta-stage.json" \
-      --transcript "$stage1_dir/transcript.jsonl" --out "$stage1_dir/run-stage1.json" | tee -a "$OUT/progress.log"
+    score_assertion stage1 b3 "$repo" "$stage1_dir/meta-stage.json" "$stage1_dir/transcript.jsonl" "$stage1_dir/run-stage1.json"
     stage1_result="$stage1_dir/run-stage1.json"
-    (cd "$repo" && git add -A && git -c user.name=bench -c user.email=b@x commit -q -m "stage1 handoff" --allow-empty)
+    bench_git "$repo" add -A
+    bench_git "$repo" -c user.name=bench -c user.email=b@x commit -q -m "stage1 handoff" --allow-empty
 
     make_config "$cfg2" "$condition"
     prompt="$(get_prompt b3-stage2)"
@@ -477,18 +596,17 @@ import sys
 print(str(any(json.load(open(path)).get("timed_out") for path in sys.argv[1:])).lower())
 PY
 )"
-    (cd "$repo" && git add -A && git -c user.name=bench -c user.email=b@x commit -q -m "stage2 output" --allow-empty)
+    bench_git "$repo" add -A
+    bench_git "$repo" -c user.name=bench -c user.email=b@x commit -q -m "stage2 output" --allow-empty
     local final
-    final="$(git -C "$repo" rev-parse HEAD)"
-    git -C "$repo" diff --stat "$base" "$final" >"$dir/diffstat.txt" || true
-    git -C "$repo" diff "$base" "$final" >"$dir/full.diff" || true
-    git -C "$repo" reset -q --soft "$base"
+    final="$(bench_git "$repo" rev-parse HEAD)"
+    bench_git "$repo" --no-pager diff --no-ext-diff --stat "$base" "$final" >"$dir/diffstat.txt" || true
+    bench_git "$repo" --no-pager diff --no-ext-diff "$base" "$final" >"$dir/full.diff" || true
+    bench_git "$repo" reset -q --soft "$base"
     transcript="$stage2_dir/transcript.jsonl"
     stderr="$stage2_dir/stderr.txt"
     write_final_meta "$dir/meta.json" "$scenario" "$condition" "$run_number" "$wall" "$rc" "$timed" "$repo" "$transcript" "$stderr" "$dir/full.diff" "$stage1_result"
-    python3 assert_run.py --phase final --scenario "$scenario" --repo "$repo" --meta "$dir/meta.json" \
-      --transcript "$stage2_dir/transcript.jsonl" --stage1-transcript "$stage1_dir/transcript.jsonl" \
-      --stage1-result "$stage1_result" --out "$dir/run.json" | tee -a "$OUT/progress.log"
+    score_assertion final "$scenario" "$repo" "$dir/meta.json" "$stage2_dir/transcript.jsonl" "$dir/run.json" "$stage1_dir/transcript.jsonl" "$stage1_result"
   else
     main_dir="$dir/session"
     cfg="$dir/config"
@@ -504,8 +622,7 @@ $prompt"
     transcript="$main_dir/transcript.jsonl"
     stderr="$main_dir/stderr.txt"
     write_final_meta "$dir/meta.json" "$scenario" "$condition" "$run_number" "$wall" "$rc" "$timed" "$repo" "$transcript" "$stderr" "$dir/full.diff" ""
-    python3 assert_run.py --phase final --scenario "$scenario" --repo "$repo" --meta "$dir/meta.json" \
-      --transcript "$transcript" --out "$dir/run.json" | tee -a "$OUT/progress.log"
+    score_assertion final "$scenario" "$repo" "$dir/meta.json" "$transcript" "$dir/run.json"
   fi
 }
 

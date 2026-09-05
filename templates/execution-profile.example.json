@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "profile": "dual-agent-local",
+  "roles": {
+    "implementer": {
+      "adapter": "claude-code-cli",
+      "authentication": "inherited"
+    },
+    "reviewer": {
+      "adapter": "codex-cli",
+      "authentication": "inherited",
+      "write_access": false
+    }
+  },
+  "review": {
+    "max_cycles": 3,
+    "checkpoint_required": true,
+    "independent": true,
+    "on_reviewer_unavailable": "stop"
+  },
+  "interaction": {
+    "detail": "simple",
+    "progress": "concise"
+  },
+  "history": {
+    "enabled": true
+  }
+}

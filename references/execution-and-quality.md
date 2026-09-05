@@ -49,22 +49,66 @@ For each reviewer provide:
 - prohibited changes
 - completion criteria
 - return_to
+- baseline and plan revisions
+- base commit and exact reviewed commit when reviewing code
+- review cycle when part of an automated correction loop
 
-Reviewers inspect primary evidence and work independently before synthesis.
+Reviewers inspect primary evidence and work independently before synthesis. Implementer summaries are claims, not proof.
 
 Finding fields:
 - ID/title
 - Severity: Critical/High/Medium/Low
 - Confidence: High/Medium/Low
+- Scope relevance: current_required/current_blocking/adjacent/future/unrelated
 - Evidence
 - Impact
-- Root cause
-- Alternative explanations
-- Recommendation/alternatives
-- Effort/dependencies/reversibility
-- Acceptance criteria
-- Validation method
-- Approval/external-validation need
+- Root cause where known
+- Recommendation/correction
+- Acceptance criteria or validation method
+- Approval/external-validation need where applicable
+
+Reviewer verdicts for structured external review:
+- `PASS`
+- `CHANGES_REQUIRED`
+- `ESCALATE`
+
+A review is stale if the reviewed commit, requirements baseline revision, or plan revision no longer matches the controller state relevant to that Work Packet. Reconcile or repeat the affected review before integration.
+
+## Reviewer signal quality
+
+Independent review exists to improve correctness and assurance, not to generate commentary volume.
+
+Prioritize findings with credible impact on:
+- approved behavior/specification
+- correctness/regression risk
+- security/privacy
+- reliability/data integrity
+- performance when material
+- maintainability/operability when material
+- required tests or failure handling
+
+Normally suppress purely stylistic preferences, speculative abstractions, subjective refactors, or lint-level observations that do not materially affect the current packet.
+
+## Correction loop and disagreements
+
+For external implementer/reviewer loops:
+1. implement against the current Work Packet
+2. create an immutable checkpoint
+3. review that exact checkpoint independently
+4. return structured findings
+5. implement applicable corrections
+6. checkpoint again
+7. independently re-review actual repository evidence
+
+Bound automatic cycles. Three is a reasonable default, but profiles may choose another small limit appropriate to cost/risk.
+
+Implementer dispositions may include:
+- fixed
+- disputed with evidence
+- out of scope
+- deferred through normal scope control
+
+A dispute is not resolved by explanation alone. The reviewer rechecks primary evidence. Escalate genuine unresolved material disagreement after the configured cycle/dispute limit rather than looping indefinitely.
 
 ## Adversarial verification
 
@@ -90,6 +134,7 @@ Work Packet gate:
 - linked requirements/invariants updated
 - discovered work classified
 - Plan Delta recorded when needed
+- required independent review passed or explicitly dispositioned under authority
 - reconciliation complete
 - return_to resolved
 
@@ -135,6 +180,8 @@ For risky work, establish a reversible checkpoint.
 
 If a rule must always hold, encode it through the strongest appropriate mechanism: tests, types, schema/database constraints, CI, permissions, hooks, automated checks, or infrastructure policy.
 
+Role separation should use actual permissions/sandboxes when available. A read-only external reviewer is stronger than merely telling a reviewer not to edit.
+
 Do not rely on prose alone for hard guarantees.
 
 ## Review finding triage
@@ -154,6 +201,18 @@ Classify every material review finding on two independent axes:
 Only `current_required` and `current_blocking` automatically enter current implementation.
 
 A Critical/High finding that is adjacent/future/unrelated must be surfaced promptly and given an explicit disposition according to risk/authority. Severity does not grant permission to silently rewrite scope.
+
+## Risk-based review policy
+
+Do not force expensive independent review onto every tiny edit.
+
+Typical default:
+1. Quick Task -> deterministic checks plus focused diff review
+2. Planned Change -> independent external review when useful or configured
+3. High-Risk Change -> independent review strongly preferred/required by project policy
+4. Major milestone/release closure -> independent review plus Convergence where applicable
+
+The project may tighten this policy, but should not weaken required assurance merely to save model usage.
 
 ## Verification mechanism ladder
 
