@@ -23,6 +23,11 @@ class CodexCLIReviewer:
         result = run_command([self.binary, "login", "status"], cwd=cwd, timeout_s=30)
         if result.returncode != 0:
             return False, "Codex is not signed in. Run `codex login`."
+        help_result = run_command([self.binary, "exec", "--help"], cwd=cwd, timeout_s=30)
+        help_text = f"{help_result.stdout}\n{help_result.stderr}"
+        required_flags = ("--ignore-user-config", "--ignore-rules", "--output-schema")
+        if help_result.returncode != 0 or any(flag not in help_text for flag in required_flags):
+            return False, "Codex CLI is too old for Forge's isolated reviewer mode. Update Codex CLI."
         return True, "Codex ready"
 
     def review(self, prompt: str, cwd: Path, schema_path: Path) -> tuple[AgentRun, dict[str, object]]:
@@ -38,6 +43,8 @@ class CodexCLIReviewer:
                     "--sandbox",
                     "read-only",
                     "--ephemeral",
+                    "--ignore-user-config",
+                    "--ignore-rules",
                     "--color",
                     "never",
                     "--output-schema",
@@ -57,4 +64,6 @@ class CodexCLIReviewer:
                 payload = json.loads(output_path.read_text(encoding="utf-8"))
             except (OSError, UnicodeError, json.JSONDecodeError) as exc:
                 raise AdapterError("Codex did not return a valid structured review") from exc
+            if not isinstance(payload, dict):
+                raise AdapterError("Codex structured review must be a JSON object")
         return result, payload
