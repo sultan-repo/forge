@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.8.0
+
+Dual-agent execution, security hardening, and CI acceleration release.
+
+- adds the optional Forge dual-agent runner with Claude Code as implementer and Codex CLI as an independent read-only reviewer
+- introduces immutable Git checkpoints, bounded review/correction cycles, resumable execution state, and simple-by-default user interaction
+- preserves canonical project-control state while keeping runner lifecycle and recovery state separately under `.claude/forge/runtime`
+- adds strict structured review and implementation-handoff contracts, scope-aware finding triage, and serious deferred-finding surfacing
+- hardens stale-review detection, linked-worktree Git metadata handling, staged/untracked correction detection, and review-gated task completion
+- isolates Codex review from user config and rules while preserving inherited CLI authentication
+- fixes benchmark-scoring isolation by moving real-agent scoring and post-agent Git operations into a dedicated no-network scorer container
+- adds a host-escape regression proving candidate pytest hooks cannot write outside the scoring sandbox or inherit controller secrets
+- adds dual-agent regression coverage plus package validation for the runner, schemas, scorer assets, and security tests
+- speeds validation with parallel CI lanes, pip and Docker BuildKit caching, path-aware expensive checks, stale-run cancellation, and a final validation gate
+
 ## 1.7.1
 
 Documentation and CI maintenance release. Forge methodology and benchmark claims are unchanged.
