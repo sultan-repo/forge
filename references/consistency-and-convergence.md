@@ -8,7 +8,7 @@ Packet reconciliation prevents implementation from drifting away from the plan.
 
 The **Plan Consistency Gate** prevents the plan from drifting away from the specification before coding.
 
-The **Convergence Gate** proves the implemented system eventually returns to the approved specification and design after coding.
+The **Convergence Gate** checks the implemented system against the approved specification and design using the available evidence. Its confidence is limited by that evidence; a recorded gate status is not proof by itself.
 
 Together:
 

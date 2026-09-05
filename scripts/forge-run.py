@@ -9,24 +9,25 @@ interrupted runs can resume without rewriting canonical project state.
 from __future__ import annotations
 
 import argparse
-import copy
+import hashlib
 import json
 import os
 import re
 import subprocess
 import sys
 import tempfile
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PACKAGE_ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from adapters import ClaudeCodeImplementer, CodexCLIReviewer  # noqa: E402
-from adapters.base import AdapterError  # noqa: E402
+from adapters import ClaudeCodeImplementer, CodexCLIReviewer
+from adapters.base import AdapterError
 
 CONTROL_DEFAULT = Path(".claude/project-control.json")
 PROFILE_DEFAULT = Path(".claude/forge/execution-profile.json")
@@ -81,12 +82,12 @@ def run_local(
     )
 
 
-def git(cwd: Path, *args: str, check: bool = True) -> str:
+def git(cwd: Path, *args: str, check: bool = True, strip: bool = True) -> str:
     completed = run_local(["git", *args], cwd)
     if check and completed.returncode != 0:
         detail = (completed.stderr or completed.stdout).strip()
         raise ForgeRunnerError(f"Git check failed: {detail[:400]}")
-    return completed.stdout.strip()
+    return completed.stdout.strip() if strip else completed.stdout
 
 
 def repo_root(start: Path) -> Path:
@@ -211,9 +212,11 @@ def append_history(root: Path, event: dict[str, Any], enabled: bool = True) -> N
 
 def validate_profile(profile: dict[str, Any]) -> None:
     allowed_top = {"version", "profile", "roles", "review", "interaction", "history"}
-    if set(profile) - allowed_top:
-        raise ForgeRunnerError("Execution profile contains unsupported options.")
-    if profile.get("version") != 1 or not isinstance(profile.get("profile"), str):
+    if set(profile) != allowed_top:
+        raise ForgeRunnerError("Execution profile has missing or unsupported options.")
+    if type(profile.get("version")) is not int or profile["version"] != 1:
+        raise ForgeRunnerError("Unsupported Forge execution profile version.")
+    if not isinstance(profile.get("profile"), str) or not profile["profile"]:
         raise ForgeRunnerError("Unsupported Forge execution profile.")
     roles = profile.get("roles")
     if not isinstance(roles, dict) or set(roles) != {"implementer", "reviewer"}:
@@ -222,6 +225,12 @@ def validate_profile(profile: dict[str, Any]) -> None:
     reviewer = roles["reviewer"]
     if not isinstance(implementer, dict) or not isinstance(reviewer, dict):
         raise ForgeRunnerError("Execution profile roles are invalid.")
+    if set(implementer) != {"adapter", "authentication"} or set(reviewer) != {
+        "adapter", "authentication", "write_access"
+    }:
+        raise ForgeRunnerError("Execution profile roles have missing or unsupported options.")
+    if any(role.get("authentication") != "inherited" for role in (implementer, reviewer)):
+        raise ForgeRunnerError("Agent authentication must be inherited from the local CLI.")
     if implementer.get("adapter") != "claude-code-cli":
         raise ForgeRunnerError("This runner currently supports claude-code-cli as implementer.")
     if reviewer.get("adapter") != "codex-cli":
@@ -237,7 +246,7 @@ def validate_profile(profile: dict[str, Any]) -> None:
         "independent",
         "on_reviewer_unavailable",
     }
-    if set(review) - allowed_review:
+    if set(review) != allowed_review:
         raise ForgeRunnerError("Execution profile review settings contain unsupported options.")
     max_cycles = review.get("max_cycles")
     if not isinstance(max_cycles, int) or isinstance(max_cycles, bool) or not 1 <= max_cycles <= 10:
@@ -246,17 +255,17 @@ def validate_profile(profile: dict[str, Any]) -> None:
         raise ForgeRunnerError("Dual-agent review requires independent checkpointed review.")
     if review.get("on_reviewer_unavailable") != "stop":
         raise ForgeRunnerError("Unsupported reviewer-unavailable policy.")
-    interaction = profile.get("interaction", {})
-    if not isinstance(interaction, dict) or set(interaction) - {"detail", "progress"}:
+    interaction = profile["interaction"]
+    if not isinstance(interaction, dict) or set(interaction) != {"detail", "progress"}:
         raise ForgeRunnerError("Execution profile interaction settings are invalid.")
-    if interaction.get("detail", "simple") not in {"simple", "verbose"}:
+    if interaction["detail"] not in ("simple", "verbose"):
         raise ForgeRunnerError("Unsupported interaction.detail setting.")
-    if interaction.get("progress", "concise") not in {"concise", "verbose"}:
+    if interaction["progress"] not in ("concise", "verbose"):
         raise ForgeRunnerError("Unsupported interaction.progress setting.")
-    history = profile.get("history", {})
-    if not isinstance(history, dict) or set(history) - {"enabled"}:
+    history = profile["history"]
+    if not isinstance(history, dict) or set(history) != {"enabled"}:
         raise ForgeRunnerError("Execution profile history settings are invalid.")
-    if not isinstance(history.get("enabled", True), bool):
+    if not isinstance(history["enabled"], bool):
         raise ForgeRunnerError("history.enabled must be boolean.")
 
 
@@ -289,7 +298,7 @@ def revisions(state: dict[str, Any]) -> tuple[int, int]:
     return baseline, plan
 
 
-def choose_packet(state: dict[str, Any], packet_id: str | None) -> str:
+def choose_packet(state: dict[str, Any], packet_id: str | None, *, require_eligible: bool = True) -> str:
     packets = state.get("work_packets")
     if not isinstance(packets, dict):
         raise ForgeRunnerError("Forge work_packets state is invalid.")
@@ -304,9 +313,9 @@ def choose_packet(state: dict[str, Any], packet_id: str | None) -> str:
     packet = packets.get(packet_id)
     if not isinstance(packet, dict):
         raise ForgeRunnerError(f"Unknown Work Packet: {packet_id}")
-    if packet_id not in active:
+    if require_eligible and packet_id not in active:
         raise ForgeRunnerError(f"{packet_id} is not an active Work Packet.")
-    if packet.get("status") not in ELIGIBLE_PACKET_STATUSES:
+    if require_eligible and packet.get("status") not in ELIGIBLE_PACKET_STATUSES:
         raise ForgeRunnerError(f"{packet_id} is not eligible to run in its current status.")
     return packet_id
 
@@ -321,6 +330,8 @@ def check_execution_preconditions(state: dict[str, Any], packet_id: str) -> None
     if gate.get("baseline_revision") != baseline or gate.get("plan_revision") != plan:
         raise ForgeRunnerError("The plan changed since the last consistency check. Reconcile it before running.")
     packet = state["work_packets"][packet_id]
+    if revisions(packet) != (baseline, plan):
+        raise ForgeRunnerError(f"{packet_id} does not match the current baseline and plan. Reconcile it before running.")
     for dependency in packet.get("dependencies", []):
         target = state.get("work_packets", {}).get(dependency) or state.get("milestones", {}).get(dependency)
         if not isinstance(target, dict) or target.get("status") != "done":
@@ -356,27 +367,46 @@ def load_execution_state(
     root: Path,
     state: dict[str, Any],
     packet_id: str,
+    *,
+    create: bool = True,
 ) -> dict[str, Any]:
     path = runtime_state_path(root, packet_id)
     if not path.exists():
         value = new_execution_state(root, state, packet_id)
-        atomic_json(path, value)
+        if create:
+            atomic_json(path, value)
         return value
     value = read_json(path)
-    if value.get("version") != 1 or value.get("packet_id") != packet_id:
+    if type(value.get("version")) is not int or value["version"] != 1 or value.get("packet_id") != packet_id:
         raise ForgeRunnerError("Forge execution recovery state is invalid.")
     phase = value.get("phase")
-    if phase not in PHASES:
+    if not isinstance(phase, str) or phase not in PHASES:
         raise ForgeRunnerError("Forge execution recovery phase is invalid.")
     for key in ("implementation_attempt", "review_cycle", "completed_reviews"):
         current = value.get(key)
         if not isinstance(current, int) or isinstance(current, bool) or current < 0:
             raise ForgeRunnerError("Forge execution recovery counters are invalid.")
+    for key in ("baseline_revision", "plan_revision"):
+        current = value.get(key)
+        if type(current) is not int or current < 1:
+            raise ForgeRunnerError("Forge execution recovery revisions are invalid.")
+    if not isinstance(value.get("packet_base_commit"), str) or not re.fullmatch(
+        r"(?:[0-9a-f]{40}|[0-9a-f]{64})", value["packet_base_commit"]
+    ):
+        raise ForgeRunnerError("Forge execution recovery base checkpoint is invalid.")
     return value
 
 
 def save_execution_state(root: Path, packet_id: str, execution: dict[str, Any]) -> None:
     atomic_json(runtime_state_path(root, packet_id), execution)
+
+
+def check_execution_control_path(root: Path, packet_id: str, control_rel: Path, execution: dict[str, Any]) -> None:
+    # Older records predate custom-path binding and belong to the canonical file.
+    if runtime_state_path(root, packet_id).exists() and execution.get(
+        "control_path", CONTROL_DEFAULT.as_posix()
+    ) != control_rel.as_posix():
+        raise ForgeRunnerError("This execution belongs to a different Forge control-state path.")
 
 
 def worktree_changes(root: Path) -> list[str]:
@@ -407,6 +437,24 @@ def repository_is_clean(root: Path) -> bool:
     return not worktree_changes(root)
 
 
+def worktree_fingerprint(root: Path) -> str:
+    """Compare working contents, including partial edits from an interrupted attempt."""
+    digest = hashlib.sha256()
+    # HEAD..worktree includes both staged and unstaged tracked changes. Git's binary
+    # format preserves content changes that a filename-only status would miss.
+    digest.update(git(root, "diff", "--binary", "--no-ext-diff", "HEAD", "--").encode())
+    for relative in sorted(worktree_changes(root)):
+        path = root / relative
+        digest.update(os.fsencode(relative) + b"\0")
+        if path.is_symlink():
+            digest.update(os.fsencode(os.readlink(path)))
+        elif path.is_file():
+            with path.open("rb") as handle:
+                for block in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(block)
+    return digest.hexdigest()
+
+
 def commit_all_changes(root: Path, message: str) -> str:
     if repository_is_clean(root):
         return git(root, "rev-parse", "HEAD")
@@ -416,8 +464,8 @@ def commit_all_changes(root: Path, message: str) -> str:
 
 
 def changed_files(root: Path, base: str, head: str) -> list[str]:
-    output = git(root, "diff", "--name-only", f"{base}..{head}")
-    return [line for line in output.splitlines() if line.strip()]
+    output = git(root, "diff", "--name-only", "--no-renames", "-z", f"{base}..{head}", "--", strip=False)
+    return [path for path in output.split("\0") if path]
 
 
 def capture_invalid_control(root: Path, packet_id: str, candidate: str) -> Path:
@@ -477,15 +525,21 @@ def parse_implementation_report(stdout: str) -> dict[str, Any]:
         result["summary"] = inner[-2000:]
         return result
     result["summary"] = str(payload.get("summary") or "")[-2000:]
-    if isinstance(payload.get("acceptance_results"), dict):
+    acceptance = payload.get("acceptance_results")
+    acceptance_valid = isinstance(acceptance, dict) and all(isinstance(item, str) for item in acceptance.values())
+    if acceptance_valid:
         result["acceptance_results"] = payload["acceptance_results"]
-    if isinstance(payload.get("validation"), list):
-        result["validation"] = payload["validation"]
-    if isinstance(payload.get("discoveries"), list):
-        result["discoveries"] = payload["discoveries"]
-    if isinstance(payload.get("known_uncertainties"), list):
-        result["known_uncertainties"] = payload["known_uncertainties"]
-    result["structured"] = True
+    for key, item_type in (("validation", dict), ("discoveries", dict), ("known_uncertainties", str)):
+        items = payload.get(key)
+        if isinstance(items, list) and all(isinstance(item, item_type) for item in items):
+            result[key] = items
+    result["structured"] = (
+        isinstance(payload.get("summary"), str)
+        and acceptance_valid
+        and all(key in payload and result[key] == payload[key] for key in (
+            "validation", "discoveries", "known_uncertainties"
+        ))
+    )
     return result
 
 
@@ -493,12 +547,13 @@ def implementation_prompt(
     packet_id: str,
     state: dict[str, Any],
     findings: list[dict[str, Any]] | None,
+    control_rel: Path = CONTROL_DEFAULT,
 ) -> str:
     packet = state["work_packets"][packet_id]
     prompt = f"""
 You are the IMPLEMENTER for Forge Work Packet {packet_id}.
 Work only inside the current project's approved scope. Read the canonical requirements,
-architecture, plan, tests, and .claude/project-control.json before editing.
+architecture, plan, tests, and {control_rel.as_posix()} before editing.
 
 Packet snapshot:
 {json.dumps(packet, indent=2)}
@@ -510,6 +565,7 @@ Rules:
 - Do not silently expand scope.
 - Do not mark the packet approved, independently reviewed, reconciled, or done.
 - Do not create Git commits; the Forge runner owns review checkpoints.
+- Do not edit .claude/forge/runtime; the runner owns execution and review evidence.
 - Keep user-facing text concise.
 
 Finish with a JSON object only:
@@ -539,6 +595,7 @@ def reviewer_prompt(
     packet_base: str,
     reviewed_commit: str,
     cycle: int,
+    handoff: dict[str, Any] | None = None,
 ) -> str:
     packet = state["work_packets"][packet_id]
     return f"""
@@ -550,6 +607,9 @@ current source, tests, configuration, requirements, architecture, and relevant e
 
 Packet snapshot:
 {json.dumps(packet, indent=2)}
+
+Implementation handoff (unverified implementer claims; verify against primary evidence):
+{json.dumps(handoff, indent=2) if handoff is not None else "No implementation handoff is available."}
 
 Required identity:
 - packet_id: {packet_id}
@@ -611,9 +671,11 @@ def validate_review_contract(
         "cycle": cycle,
     }
     for key, expected_value in expected.items():
-        if payload.get(key) != expected_value:
+        if type(payload.get(key)) is not type(expected_value) or payload[key] != expected_value:
             raise ForgeRunnerError(f"Reviewer returned stale or mismatched {key}.")
-    if payload.get("verdict") not in VERDICTS or not isinstance(payload.get("summary"), str):
+    if not isinstance(payload.get("verdict"), str) or payload["verdict"] not in VERDICTS:
+        raise ForgeRunnerError("Reviewer returned an invalid verdict or summary.")
+    if not isinstance(payload.get("summary"), str):
         raise ForgeRunnerError("Reviewer returned an invalid verdict or summary.")
     findings = payload.get("findings")
     if not isinstance(findings, list):
@@ -632,15 +694,22 @@ def validate_review_contract(
         "validation",
     }
     evidence_keys = {"kind", "source", "location", "detail"}
+    finding_ids: set[str] = set()
     for finding in findings:
         if not isinstance(finding, dict):
             raise ForgeRunnerError("Reviewer finding is not an object.")
         require_exact_keys(finding, finding_keys, "Review finding")
         if not isinstance(finding["id"], str) or not finding["id"]:
             raise ForgeRunnerError("Review finding ID is invalid.")
-        if finding["severity"] not in SEVERITIES or finding["confidence"] not in CONFIDENCE:
+        if finding["id"] in finding_ids:
+            raise ForgeRunnerError("Review finding IDs must be unique.")
+        finding_ids.add(finding["id"])
+        if (
+            not isinstance(finding["severity"], str) or finding["severity"] not in SEVERITIES
+            or not isinstance(finding["confidence"], str) or finding["confidence"] not in CONFIDENCE
+        ):
             raise ForgeRunnerError("Review finding classification is invalid.")
-        if finding["scope_relevance"] not in SCOPES:
+        if not isinstance(finding["scope_relevance"], str) or finding["scope_relevance"] not in SCOPES:
             raise ForgeRunnerError("Review finding scope relevance is invalid.")
         if not isinstance(finding["title"], str) or not finding["title"]:
             raise ForgeRunnerError("Review finding title is invalid.")
@@ -654,7 +723,7 @@ def validate_review_contract(
             if not isinstance(evidence, dict):
                 raise ForgeRunnerError("Review evidence is invalid.")
             require_exact_keys(evidence, evidence_keys, "Review evidence")
-            if evidence["kind"] not in {"code", "test", "runtime", "config", "requirement", "other"}:
+            if evidence["kind"] not in ("code", "test", "runtime", "config", "requirement", "other"):
                 raise ForgeRunnerError("Review evidence kind is invalid.")
             if not isinstance(evidence["source"], str) or not isinstance(evidence["detail"], str):
                 raise ForgeRunnerError("Review evidence source/detail is invalid.")
@@ -671,6 +740,8 @@ def validate_review_contract(
         ]
         if blocking:
             raise ForgeRunnerError("Reviewer returned PASS with unresolved blocking findings.")
+    if payload["verdict"] == "CHANGES_REQUIRED" and not findings:
+        raise ForgeRunnerError("Reviewer requested changes without identifying any findings.")
 
 
 def current_findings(review: dict[str, Any]) -> list[dict[str, Any]]:
@@ -704,6 +775,7 @@ def persist_deferred_findings(root: Path, packet_id: str, review: dict[str, Any]
     for finding in findings:
         if str(finding.get("id")) not in seen:
             existing.append(finding)
+            seen.add(str(finding.get("id")))
     atomic_json(
         path,
         {
@@ -741,6 +813,18 @@ def assert_review_target_unchanged(root: Path, reviewed_commit: str) -> None:
             "The repository changed while it was being reviewed. Nothing was approved; "
             "review the new repository state before continuing."
         )
+
+
+def assert_approval_current(root: Path, control_rel: Path, execution: dict[str, Any]) -> None:
+    """Allow reconciliation metadata without carrying approval onto changed source."""
+    reviewed = execution.get("reviewed_commit")
+    if not isinstance(reviewed, str) or not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", reviewed):
+        raise ForgeRunnerError("Approval is missing a valid reviewed checkpoint.")
+    ancestry = run_local(["git", "merge-base", "--is-ancestor", reviewed, "HEAD"], root)
+    changed = changed_files(root, reviewed, "HEAD") if ancestry.returncode == 0 else []
+    changed.extend(worktree_changes(root))
+    if ancestry.returncode != 0 or any(path != control_rel.as_posix() for path in changed):
+        raise ForgeRunnerError("The source changed since approval. The current implementation needs a new review.")
 
 
 def control_from_checkout(checkout: Path, control_rel: Path) -> dict[str, Any]:
@@ -829,8 +913,17 @@ def doctor(root: Path, control_path: Path, verbose: bool) -> int:
 
 def status(root: Path, control_path: Path, packet_id: str | None, verbose: bool) -> int:
     state = load_valid_control(root, control_path)
-    packet_id = choose_packet(state, packet_id)
-    execution = load_execution_state(root, state, packet_id)
+    packet_id = choose_packet(state, packet_id, require_eligible=False)
+    execution = load_execution_state(root, state, packet_id, create=False)
+    check_execution_control_path(root, packet_id, control_path.relative_to(root), execution)
+    approval_issue: str | None = None
+    if execution["phase"] == "approved":
+        try:
+            assert_approval_current(root, control_path.relative_to(root), execution)
+            if revisions(state) != (execution["baseline_revision"], execution["plan_revision"]):
+                raise ForgeRunnerError("The project plan changed since approval.")
+        except ForgeRunnerError as exc:
+            approval_issue = str(exc)
     phase = execution["phase"]
     friendly = {
         "pending": "ready to start",
@@ -842,12 +935,16 @@ def status(root: Path, control_path: Path, packet_id: str | None, verbose: bool)
         "escalated": "waiting for your decision",
         "reconcile_required": "waiting for Forge reconciliation",
     }[phase]
+    if approval_issue:
+        friendly = "holding a historical review; the current state needs a new review"
     print(f"{packet_id} is {friendly}.")
+    if approval_issue:
+        print(approval_issue)
     if execution.get("reason"):
         print(str(execution["reason"]))
     if verbose:
         print(json.dumps(execution, indent=2))
-    return 0
+    return 2 if approval_issue else 0
 
 
 def run_packet(
@@ -857,13 +954,35 @@ def run_packet(
     profile: dict[str, Any],
     verbose: bool,
 ) -> int:
+    validate_profile(profile)
+    progress_verbose = verbose or profile["interaction"]["progress"] == "verbose"
+    detail_verbose = verbose or profile["interaction"]["detail"] == "verbose"
     state = load_valid_control(root, control_path)
     packet_id = choose_packet(state, packet_id)
     check_execution_preconditions(state, packet_id)
-    execution = load_execution_state(root, state, packet_id)
+    execution = load_execution_state(root, state, packet_id, create=False)
+    control_rel = control_path.relative_to(root)
+    check_execution_control_path(root, packet_id, control_rel, execution)
+    execution["control_path"] = control_rel.as_posix()
+
+    if execution["phase"] == "pending":
+        if not repository_is_clean(root):
+            raise ForgeRunnerError("Your project has uncommitted changes. Commit them before starting this Work Packet.")
+        # A status query or rejected start must not pin an obsolete packet baseline.
+        execution = new_execution_state(root, state, packet_id)
+        execution["control_path"] = control_rel.as_posix()
+        save_execution_state(root, packet_id, execution)
+    elif revisions(state) != (execution["baseline_revision"], execution["plan_revision"]):
+        execution["phase"] = "reconcile_required"
+        execution["reason"] = "The requirements or plan revision changed since this execution started."
+        save_execution_state(root, packet_id, execution)
 
     if execution["phase"] == "approved":
+        assert_approval_current(root, control_rel, execution)
         print("Review already passed. Forge reconciliation is next.")
+        if detail_verbose:
+            print(f"Reviewed checkpoint: {execution['reviewed_commit']}")
+            print(f"Execution evidence: {runtime_state_path(root, packet_id).relative_to(root)}")
         return 0
     if execution["phase"] == "escalated":
         print("This Work Packet needs your decision before it can continue.")
@@ -873,9 +992,6 @@ def run_packet(
     if execution["phase"] == "reconcile_required":
         print("The project plan changed during implementation. Reconcile it before review.")
         return 2
-
-    if execution["phase"] == "pending" and not repository_is_clean(root):
-        raise ForgeRunnerError("Your project has uncommitted changes. Commit them before starting this Work Packet.")
 
     implementer = ClaudeCodeImplementer()
     reviewer = CodexCLIReviewer()
@@ -888,7 +1004,6 @@ def run_packet(
 
     max_cycles = int(profile["review"]["max_cycles"])
     history_enabled = bool(profile.get("history", {}).get("enabled", True))
-    control_rel = control_path.relative_to(root)
     packet_base = str(execution["packet_base_commit"])
 
     while True:
@@ -899,12 +1014,7 @@ def run_packet(
                 previous = latest_completed_review(root, packet_id, execution)
                 findings = current_findings(previous)
                 if not findings:
-                    execution["phase"] = "approved"
-                    execution["review_status"] = "passed_with_deferred_findings"
-                    execution["approved_at"] = utc_now()
-                    save_execution_state(root, packet_id, execution)
-                    print("Review passed for the current scope.")
-                    return 0
+                    raise ForgeRunnerError("Cannot resume correction without current-scope review findings.")
                 execution["implementation_attempt"] = int(execution["implementation_attempt"]) + 1
                 execution["correction_from_review"] = int(execution["last_completed_review"])
                 execution["phase"] = "implementing"
@@ -922,10 +1032,18 @@ def run_packet(
                     )
 
             dispatch_state = load_valid_control(root, control_path)
+            choose_packet(dispatch_state, packet_id)
+            check_execution_preconditions(dispatch_state, packet_id)
             dispatch_revisions = revisions(dispatch_state)
+            if dispatch_revisions != (execution["baseline_revision"], execution["plan_revision"]):
+                execution["phase"] = "reconcile_required"
+                execution["reason"] = "The requirements or plan revision changed before implementation dispatch."
+                save_execution_state(root, packet_id, execution)
+                print(execution["reason"])
+                return 2
             previous_control_text = control_path.read_text(encoding="utf-8")
             before_head = git(root, "rev-parse", "HEAD")
-            before_changes = set(worktree_changes(root))
+            before_changes = worktree_fingerprint(root)
 
             append_history(
                 root,
@@ -937,13 +1055,17 @@ def run_packet(
                 },
                 history_enabled,
             )
-            if verbose:
+            if progress_verbose:
                 print(f"Implementation attempt {execution['implementation_attempt']} started.")
 
-            result = implementer.implement(
-                implementation_prompt(packet_id, dispatch_state, findings),
-                root,
-            )
+            try:
+                result = implementer.implement(
+                    implementation_prompt(packet_id, dispatch_state, findings, control_rel),
+                    root,
+                )
+            except (AdapterError, KeyboardInterrupt, SystemExit):
+                validate_control_after_agent(root, control_path, packet_id, previous_control_text)
+                raise
             report = parse_implementation_report(result.stdout)
             post_state = validate_control_after_agent(
                 root,
@@ -964,7 +1086,19 @@ def run_packet(
                 print("The project plan changed during implementation. Changes were preserved; reconcile before review.")
                 return 2
 
-            after_changes = set(worktree_changes(root))
+            try:
+                choose_packet(post_state, packet_id)
+                check_execution_preconditions(post_state, packet_id)
+                if post_state["work_packets"][packet_id].get("reconciled") is True:
+                    raise ForgeRunnerError("The implementer marked the packet reconciled before independent review.")
+            except ForgeRunnerError as exc:
+                execution["phase"] = "reconcile_required"
+                execution["reason"] = str(exc)
+                save_execution_state(root, packet_id, execution)
+                print(f"Forge project state needs reconciliation before review. {exc}")
+                return 2
+
+            after_changes = worktree_fingerprint(root)
             changed_during_attempt = before_head != git(root, "rev-parse", "HEAD") or after_changes != before_changes
             if findings and not changed_during_attempt:
                 execution["phase"] = "escalated"
@@ -986,7 +1120,6 @@ def run_packet(
             execution["correction_from_review"] = None
             execution["baseline_revision"], execution["plan_revision"] = post_revisions
             execution["reason"] = None
-            save_execution_state(root, packet_id, execution)
             write_handoff(
                 root,
                 packet_id,
@@ -996,6 +1129,7 @@ def run_packet(
                 next_cycle,
                 report,
             )
+            save_execution_state(root, packet_id, execution)
             append_history(
                 root,
                 {
@@ -1033,12 +1167,13 @@ def run_packet(
                 {"packet": packet_id, "phase": "reviewing", "cycle": cycle, "agent": reviewer.name},
                 history_enabled,
             )
-            if verbose:
+            if progress_verbose:
                 print(f"Independent review cycle {cycle} started.")
 
             with isolated_review_checkout(root, reviewed_commit) as checkout:
                 review_state = control_from_checkout(checkout, control_rel)
                 review_baseline, review_plan = revisions(review_state)
+                handoff_file = handoff_path(root, packet_id, cycle)
                 result, review = reviewer.review(
                     reviewer_prompt(
                         packet_id,
@@ -1046,10 +1181,12 @@ def run_packet(
                         packet_base,
                         reviewed_commit,
                         cycle,
+                        read_json(handoff_file) if handoff_file.exists() else None,
                     ),
                     checkout,
                     REVIEW_SCHEMA,
                 )
+                assert_review_target_unchanged(checkout, reviewed_commit)
 
             try:
                 assert_review_target_unchanged(root, reviewed_commit)
@@ -1111,6 +1248,9 @@ def run_packet(
                 execution["reason"] = None
                 save_execution_state(root, packet_id, execution)
                 print("Done. The implementation was independently reviewed and passed.")
+                if detail_verbose:
+                    print(f"Reviewed checkpoint: {reviewed_commit}")
+                    print(f"Review evidence: {review_result_path(root, packet_id, cycle).relative_to(root)}")
                 if serious_deferred:
                     pointer = deferred_findings_path(root, packet_id).relative_to(root)
                     print(
@@ -1141,7 +1281,7 @@ def run_packet(
             execution["review_status"] = "changes_required"
             execution["reason"] = None
             save_execution_state(root, packet_id, execution)
-            if not verbose:
+            if not progress_verbose:
                 print("The independent review found an important issue. It is being fixed.")
             continue
 

@@ -46,6 +46,8 @@ def wilson(k, n, z=1.96):
 def main(out_dir: str):
     root = Path(out_dir)
     runs = [json.loads(path.read_text()) for path in sorted(root.glob("*/*/run-*/run.json"))]
+    if not runs:
+        raise SystemExit("no final run.json files found; there are no results to aggregate")
     manifest = json.loads((root / "MANIFEST.json").read_text()) if (root / "MANIFEST.json").exists() else {}
     cells = defaultdict(list)
     for run in runs:
@@ -115,7 +117,7 @@ def main(out_dir: str):
     lines.append("")
 
     lines.append("## Variance\n")
-    lines.append("| Benchmark | Condition | Pass sd (binomial) | Completion sd | Tokens sd | Runtime sd (s) | Min/Max tokens |")
+    lines.append("| Benchmark | Condition | Pass rate SE (binomial) | Completion sd | Tokens sd | Runtime sd (s) | Min/Max tokens |")
     lines.append("|---|---|---:|---:|---:|---:|---|")
     for scenario in scenarios:
         for cond in conds:

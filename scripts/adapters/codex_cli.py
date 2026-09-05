@@ -38,6 +38,8 @@ class CodexCLIReviewer:
             result = run_command(
                 [
                     self.binary,
+                    "--ask-for-approval",
+                    "never",
                     "exec",
                     "--cd",
                     str(cwd),

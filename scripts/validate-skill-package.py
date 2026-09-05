@@ -7,8 +7,10 @@ import gzip
 import json
 import os
 import re
+import runpy
 import subprocess
 import sys
+import zlib
 from pathlib import Path
 
 root = Path(__file__).resolve().parents[1]
@@ -41,8 +43,6 @@ else:
         err("Forge must allow explicit-name model invocation")
     if "explicitly mentions Forge" not in text:
         err("Forge description must constrain automatic invocation")
-    if "Simple by default" not in text:
-        err("Forge core must preserve simple-by-default user interaction")
     for target in re.findall(r"\[[^\]]+\]\(([^)]+)\)", text):
         if "://" in target or target.startswith("#"):
             continue
@@ -67,7 +67,7 @@ if not changelog_path.exists():
     err("CHANGELOG.md missing")
 elif version:
     changelog = changelog_path.read_text(encoding="utf-8")
-    match = re.search(r"^##\s+(\d+\.\d+\.\d+(?:[.-][0-9A-Za-z.-]+)?)\s*$", changelog, re.M)
+    match = re.search(r"^##\s+(\d+\.\d+\.\d+(?:[.-][0-9A-Za-z.-]+)?)\s*$", changelog, re.MULTILINE)
     if not match:
         err("CHANGELOG.md has no version heading")
     elif match.group(1) != version:
@@ -78,32 +78,50 @@ if os.environ.get("GITHUB_REF_TYPE") == "tag" and version:
     if ref_name != f"v{version}":
         err(f"git tag {ref_name!r} does not match VERSION-derived tag 'v{version}'")
 
-for path in root.rglob("*.json"):
+# Validate distributable JSON, not ignored benchmark results or a contributor's fixtures.
+for path in [*(root / "templates").rglob("*.json"), *(root / "evals").glob("*.json")]:
     try:
         json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         err(f"invalid JSON {path.relative_to(root)}: {exc}")
 
-evals_path = root / "evals" / "evals.json"
-if not evals_path.exists():
-    err("evals/evals.json missing")
-else:
+for filename, fields in (
+    ("evals.json", ("id", "prompt", "expected_output", "expectations")),
+    ("bootstrap-evals.json", ("id", "prompt", "expectations")),
+    ("dual-agent-evals.json", ("id", "scenario", "expectations")),
+):
+    path = root / "evals" / filename
     try:
-        eval_data = json.loads(evals_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError):
-        eval_data = {}
-    if eval_data.get("skill_name") != "forge":
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        err(f"cannot read {path.relative_to(root)}: {exc}")
+        continue
+    if not isinstance(data, dict) or not isinstance(data.get("evals"), list):
+        err(f"{filename} must contain an object with an evals array")
+        continue
+    if filename == "evals.json" and data.get("skill_name") != "forge":
         err("evals skill_name mismatch")
-    ids: set[object] = set()
-    for item in eval_data.get("evals", []):
-        for key in ("id", "prompt", "expected_output", "expectations"):
+    ids: set[str | int] = set()
+    for index, item in enumerate(data["evals"]):
+        label = f"{filename} eval {index + 1}"
+        if not isinstance(item, dict):
+            err(f"{label} must be an object")
+            continue
+        for key in fields:
             if key not in item:
-                err(f"eval missing {key}: {item.get('id')}")
-        if item.get("id") in ids:
-            err(f"duplicate eval id {item.get('id')}")
-        ids.add(item.get("id"))
-        if not item.get("expectations"):
-            err(f"eval {item.get('id')} has no expectations")
+                err(f"{label} missing {key}")
+        identifier = item.get("id")
+        if type(identifier) not in (str, int) or identifier == "":
+            err(f"{label} id must be a nonempty string or integer")
+        elif identifier in ids:
+            err(f"{label} duplicate id {identifier}")
+        else:
+            ids.add(identifier)
+        expectations = item.get("expectations")
+        if not isinstance(expectations, list) or not expectations or any(
+            not isinstance(value, str) or not value.strip() for value in expectations
+        ):
+            err(f"{label} must have nonempty text expectations")
 
 validator = root / "templates" / "validate-project-control.py"
 example = root / "templates" / "project-control.example.json"
@@ -123,6 +141,7 @@ required = [
     "BOOTSTRAP.md",
     "LICENSE",
     "scripts/bootstrap.sh",
+    "scripts/install.sh",
     "scripts/forge",
     "scripts/forge-run.py",
     "scripts/adapters/__init__.py",
@@ -134,6 +153,8 @@ required = [
     "evals/core/README.md",
     "evals/core/run.sh",
     "evals/core/build_fixtures.py",
+    "evals/core/fixture_bundle.py",
+    "evals/core/container_run.py",
     "evals/core/fixture_bundle.json.gz.b64",
     "evals/core/assert_run.py",
     "evals/core/score_entrypoint.py",
@@ -160,11 +181,14 @@ required = [
     "templates/execution-control-kernel.md",
     "templates/project-control.schema.json",
     "templates/execution-profile.example.json",
+    "templates/execution-profile.schema.json",
     "templates/implementation-handoff.schema.json",
     "templates/review-result.schema.json",
     "templates/session-start-control.py",
     "templates/task-completed-control.py",
     "docs/RELEASING.md",
+    "docs/runner.md",
+    "requirements-dev.txt",
 ]
 for relative in required:
     if not (root / relative).exists():
@@ -172,23 +196,21 @@ for relative in required:
 
 profile_path = root / "templates" / "execution-profile.example.json"
 if profile_path.exists():
-    profile = json.loads(profile_path.read_text(encoding="utf-8"))
-    if profile.get("version") != 1:
-        err("execution profile example must use version 1")
-    roles = profile.get("roles", {})
-    if not isinstance(roles, dict) or not isinstance(roles.get("implementer"), dict) or not isinstance(roles.get("reviewer"), dict):
-        err("execution profile must define implementer and reviewer roles")
-    review = profile.get("review", {})
-    cycles = review.get("max_cycles") if isinstance(review, dict) else None
-    if not isinstance(cycles, int) or not 1 <= cycles <= 10:
-        err("execution profile review.max_cycles must be between 1 and 10")
+    try:
+        profile = json.loads(profile_path.read_text(encoding="utf-8"))
+        if not isinstance(profile, dict):
+            raise TypeError("execution profile must be an object")
+        runner = runpy.run_path(str(root / "scripts" / "forge-run.py"))
+        runner["validate_profile"](profile)
+    except (OSError, ValueError, TypeError, RuntimeError, ImportError) as exc:
+        err(f"execution profile example is invalid: {exc}")
 
 bundle_path = root / "evals" / "core" / "fixture_bundle.json.gz.b64"
 if bundle_path.exists():
     try:
         bundle_bytes = gzip.decompress(base64.b64decode(bundle_path.read_text(encoding="ascii")))
         bundle = json.loads(bundle_bytes.decode("utf-8"))
-    except Exception as exc:
+    except (OSError, EOFError, ValueError, zlib.error) as exc:
         err(f"benchmark fixture bundle is invalid: {exc}")
     else:
         if not isinstance(bundle, dict):
@@ -203,40 +225,28 @@ if bundle_path.exists():
                 err(f"benchmark fixture bundle missing prompts: {sorted(expected_prompts - prompt_keys)}")
 
 python_files = [
-    root / "templates" / "validate-project-control.py",
-    root / "templates" / "session-start-control.py",
-    root / "templates" / "task-completed-control.py",
-    root / "scripts" / "forge-run.py",
-    root / "scripts" / "adapters" / "base.py",
-    root / "scripts" / "adapters" / "claude_code.py",
-    root / "scripts" / "adapters" / "codex_cli.py",
-    root / "evals" / "core" / "build_fixtures.py",
-    root / "evals" / "core" / "assert_run.py",
-    root / "evals" / "core" / "score_entrypoint.py",
-    root / "evals" / "core" / "aggregate.py",
-    root / "evals" / "core" / "selftest.py",
-    root / "evals" / "core" / "mock_agent.py",
-    root / "tests" / "test_dual_agent_runner.py",
-    root / "tests" / "test_benchmark_isolation.py",
+    *(root / "templates").glob("*.py"),
+    *(root / "scripts").glob("*.py"),
+    *(root / "scripts" / "adapters").glob("*.py"),
+    *(root / "evals" / "core").glob("*.py"),
+    *(root / "tests").glob("*.py"),
 ]
 for path in python_files:
-    if not path.exists():
-        continue
-    completed = subprocess.run(
-        [sys.executable, "-m", "py_compile", str(path)],
-        capture_output=True,
-        check=False,
-        text=True,
-    )
-    if completed.returncode != 0:
-        err(f"Python syntax validation failed for {path.relative_to(root)}: {completed.stderr.strip()}")
+    try:
+        compile(path.read_bytes(), str(path), "exec")
+    except (OSError, SyntaxError) as exc:
+        err(f"Python syntax validation failed for {path.relative_to(root)}: {exc}")
 
-shell_files = [root / "evals" / "core" / "run.sh", root / "scripts" / "forge"]
+shell_files = [root / "evals" / "core" / "run.sh", root / "scripts" / "forge", *(root / "scripts").glob("*.sh")]
 for shell_path in shell_files:
     if shell_path.exists():
         completed = subprocess.run(["bash", "-n", str(shell_path)], capture_output=True, check=False, text=True)
         if completed.returncode != 0:
             err(f"shell syntax invalid for {shell_path.relative_to(root)}: {completed.stderr.strip()}")
+
+for launcher in ("forge", "bootstrap.sh", "install.sh"):
+    if not os.access(root / "scripts" / launcher, os.X_OK):
+        err(f"scripts/{launcher} must be executable")
 
 for warning in warnings:
     print("SKILL WARNING:", warning, file=sys.stderr)

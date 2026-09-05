@@ -33,7 +33,7 @@ Plan:
   "active_work_packets": ["WP-1.1"],
   "resume_queue": ["WP-1.2", "M2", "M3"],
   "requirements": {
-    "FR-001": {"status": "in_progress", "milestone": "M1", "work_packets": ["WP-1.1"]},
+    "FR-001": {"status": "in_progress", "milestone": "M1", "work_packets": ["WP-1.1", "WP-1.2"]},
     "FR-002": {"status": "planned", "milestone": "M2", "work_packets": []},
     "FR-003": {"status": "planned", "milestone": "M2", "work_packets": []},
     "FR-004": {"status": "planned", "milestone": "M3", "work_packets": []}
@@ -52,6 +52,18 @@ Plan:
       "plan_revision": 1,
       "dependencies": [],
       "return_to": "WP-1.2",
+      "acceptance_status": "pending",
+      "validation_status": "pending",
+      "reconciled": false
+    },
+    "WP-1.2": {
+      "status": "planned",
+      "parent": "M1",
+      "requirements": ["FR-001"],
+      "baseline_revision": 1,
+      "plan_revision": 1,
+      "dependencies": ["WP-1.1"],
+      "return_to": "M2",
       "acceptance_status": "pending",
       "validation_status": "pending",
       "reconciled": false
@@ -83,7 +95,7 @@ Validation:
 - import integration test
 - row-count reconciliation
 
-Return target: `WP-1.2`.
+Return target: `WP-1.2`, which validates the import pipeline end to end before M2 begins. The JSON above is a complete initial control-state example; the following sections describe later transitions.
 
 ## Discovery during implementation
 
@@ -99,7 +111,7 @@ Classify it:
 - return_to: `WP-1.1`
 - same baseline revision 1 / plan revision 1
 
-The detour determines that duplicates should be idempotently ignored while conflicting duplicate IDs must be surfaced as errors.
+The detour proposes importing each transaction once, reporting identical duplicates explicitly, and surfacing conflicting duplicate IDs as errors. Reporting duplicates preserves INV-001 rather than silently discarding rows.
 
 That changes intended import behavior, so Forge proposes a Plan Delta.
 
@@ -112,12 +124,15 @@ That changes intended import behavior, so Forge proposes a Plan Delta.
   "to_plan_revision": 2,
   "reason": "Define duplicate transaction-ID behavior required for FR-001 correctness",
   "affected_requirements": ["FR-001"],
-  "decision": "Ignore byte-equivalent duplicate rows; surface conflicting duplicate IDs",
-  "authority_level": "proceed_and_record"
+  "decision": "Import each transaction once; report identical duplicates and reject conflicting duplicate IDs",
+  "from_baseline_revision": 1,
+  "to_baseline_revision": 2,
+  "authority_level": "explicit_approval",
+  "approval_ref": "decisions/duplicate-import-policy.md"
 }
 ```
 
-After acceptance, `plan_revision` becomes 2. Any worker still operating against revision 1 is stale for integration until reconciled.
+This example assumes the user approves the behavior change and the controller records that decision in `decisions/duplicate-import-policy.md`; the path is an illustrative decision record, not a Forge package file. After approval, both `baseline_revision` and `plan_revision` become 2 because the accepted requirement changed. Update the canonical FR-001 acceptance, reconcile affected packet revisions, and re-run Plan Consistency at the new revisions. A worker still using revision 1 is stale for integration until reconciled.
 
 ## Reconciliation
 
@@ -127,8 +142,8 @@ After `WP-1.1.1`:
 2. FR-001 acceptance now includes duplicate behavior
 3. `WP-1.1.1` is marked done and reconciled
 4. control returns to `WP-1.1`
-5. `WP-1.1` completes its remaining validation
-6. M2 and M3 remain present in the resume queue
+5. `WP-1.1` remains active while its remaining validation is pending
+6. `WP-1.2`, M2, and M3 remain present in the resume queue
 
 The local problem was solved without becoming the new roadmap.
 
@@ -136,7 +151,7 @@ The local problem was solved without becoming the new roadmap.
 
 ```text
 Forge orientation
-Baseline: RB-1 rev 1
+Baseline: RB-1 rev 2
 Plan: rev 2
 Current milestone: M1
 Active packet: WP-1.1

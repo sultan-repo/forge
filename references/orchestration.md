@@ -86,7 +86,7 @@ The methodology must remain usable when optional capabilities change or disappea
 
 External orchestration may store execution-specific state as an optional extension beside normal Work Packet state, for example:
 
-`pending | implementing | ready_for_review | reviewing | fixing | approved | escalated`
+`pending | implementing | ready_for_review | reviewing | fixing | approved | escalated | reconcile_required`
 
 Delivery status and execution phase are separate concepts. A packet can remain `in_progress` while the external review phase changes.
 
@@ -99,7 +99,7 @@ Persist enough information to recover after interruption:
 - latest verdict/findings pointer
 - next execution phase
 
-On resume, inspect durable state and actual Git state before restarting work. Do not repeat a completed implementation simply because the controller process restarted.
+On resume, inspect durable state and actual Git state before restarting work. A saved implementation checkpoint should proceed to review; an external implementation call interrupted before its checkpoint may need to run again. Escalations and revision changes require controller reconciliation. See the [bundled runner guide](../docs/runner.md) for its supported commands and limits.
 
 ## 7. Worker return contract
 
