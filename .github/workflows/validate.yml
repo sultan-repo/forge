@@ -20,12 +20,16 @@ jobs:
         run: python3 -m pip install --disable-pip-version-check pytest ruff mypy
       - name: Validate skill package
         run: python3 scripts/validate-skill-package.py
-      - name: Lint downstream Python templates
+      - name: Lint Forge Python
         run: |
           python3 -m ruff check \
             templates/validate-project-control.py \
             templates/session-start-control.py \
-            templates/task-completed-control.py
+            templates/task-completed-control.py \
+            scripts/forge-run.py \
+            scripts/adapters/base.py \
+            scripts/adapters/claude_code.py \
+            scripts/adapters/codex_cli.py
           python3 -m mypy --strict \
             templates/validate-project-control.py \
             templates/session-start-control.py \
