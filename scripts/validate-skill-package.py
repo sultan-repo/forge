@@ -41,6 +41,8 @@ else:
         err("Forge must allow explicit-name model invocation")
     if "explicitly mentions Forge" not in text:
         err("Forge description must constrain automatic invocation")
+    if "Simple by default" not in text:
+        err("Forge core must preserve simple-by-default user interaction")
     for target in re.findall(r"\[[^\]]+\]\(([^)]+)\)", text):
         if "://" in target or target.startswith("#"):
             continue
@@ -121,6 +123,12 @@ required = [
     "BOOTSTRAP.md",
     "LICENSE",
     "scripts/bootstrap.sh",
+    "scripts/forge",
+    "scripts/forge-run.py",
+    "scripts/adapters/__init__.py",
+    "scripts/adapters/base.py",
+    "scripts/adapters/claude_code.py",
+    "scripts/adapters/codex_cli.py",
     "evals/bootstrap-evals.json",
     "evals/CORE-BENCHMARKS.md",
     "evals/core/README.md",
@@ -144,8 +152,12 @@ required = [
     "references/example-walkthrough.md",
     "references/claude-code-integration.md",
     "references/optional-task-hooks.md",
+    "references/user-interaction.md",
     "templates/execution-control-kernel.md",
     "templates/project-control.schema.json",
+    "templates/execution-profile.example.json",
+    "templates/implementation-handoff.schema.json",
+    "templates/review-result.schema.json",
     "templates/session-start-control.py",
     "templates/task-completed-control.py",
     "docs/RELEASING.md",
@@ -153,6 +165,19 @@ required = [
 for relative in required:
     if not (root / relative).exists():
         err(f"required package file missing: {relative}")
+
+profile_path = root / "templates" / "execution-profile.example.json"
+if profile_path.exists():
+    profile = json.loads(profile_path.read_text(encoding="utf-8"))
+    if profile.get("version") != 1:
+        err("execution profile example must use version 1")
+    roles = profile.get("roles", {})
+    if not isinstance(roles, dict) or not isinstance(roles.get("implementer"), dict) or not isinstance(roles.get("reviewer"), dict):
+        err("execution profile must define implementer and reviewer roles")
+    review = profile.get("review", {})
+    cycles = review.get("max_cycles") if isinstance(review, dict) else None
+    if not isinstance(cycles, int) or not 1 <= cycles <= 10:
+        err("execution profile review.max_cycles must be between 1 and 10")
 
 bundle_path = root / "evals" / "core" / "fixture_bundle.json.gz.b64"
 if bundle_path.exists():
@@ -177,6 +202,10 @@ python_files = [
     root / "templates" / "validate-project-control.py",
     root / "templates" / "session-start-control.py",
     root / "templates" / "task-completed-control.py",
+    root / "scripts" / "forge-run.py",
+    root / "scripts" / "adapters" / "base.py",
+    root / "scripts" / "adapters" / "claude_code.py",
+    root / "scripts" / "adapters" / "codex_cli.py",
     root / "evals" / "core" / "build_fixtures.py",
     root / "evals" / "core" / "assert_run.py",
     root / "evals" / "core" / "aggregate.py",
@@ -195,16 +224,12 @@ for path in python_files:
     if completed.returncode != 0:
         err(f"Python syntax validation failed for {path.relative_to(root)}: {completed.stderr.strip()}")
 
-benchmark_runner = root / "evals" / "core" / "run.sh"
-if benchmark_runner.exists():
-    completed = subprocess.run(
-        ["bash", "-n", str(benchmark_runner)],
-        capture_output=True,
-        check=False,
-        text=True,
-    )
-    if completed.returncode != 0:
-        err(f"benchmark runner shell syntax invalid: {completed.stderr.strip()}")
+shell_files = [root / "evals" / "core" / "run.sh", root / "scripts" / "forge"]
+for shell_path in shell_files:
+    if shell_path.exists():
+        completed = subprocess.run(["bash", "-n", str(shell_path)], capture_output=True, check=False, text=True)
+        if completed.returncode != 0:
+            err(f"shell syntax invalid for {shell_path.relative_to(root)}: {completed.stderr.strip()}")
 
 for warning in warnings:
     print("SKILL WARNING:", warning, file=sys.stderr)
