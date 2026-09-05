@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import tempfile
+from pathlib import Path
 
 from .base import AdapterError, AgentRun, require_binary, run_command
 
@@ -29,22 +29,27 @@ class CodexCLIReviewer:
         require_binary(self.binary)
         with tempfile.TemporaryDirectory(prefix="forge-codex-") as tmp:
             output_path = Path(tmp) / "review.json"
-            result = run_command([
-                self.binary,
-                "exec",
-                "--cd",
-                str(cwd),
-                "--sandbox",
-                "read-only",
-                "--ephemeral",
-                "--color",
-                "never",
-                "--output-schema",
-                str(schema_path),
-                "--output-last-message",
-                str(output_path),
-                "-",
-            ], cwd=cwd, stdin=prompt, timeout_s=self.timeout_s)
+            result = run_command(
+                [
+                    self.binary,
+                    "exec",
+                    "--cd",
+                    str(cwd),
+                    "--sandbox",
+                    "read-only",
+                    "--ephemeral",
+                    "--color",
+                    "never",
+                    "--output-schema",
+                    str(schema_path),
+                    "--output-last-message",
+                    str(output_path),
+                    "-",
+                ],
+                cwd=cwd,
+                stdin=prompt,
+                timeout_s=self.timeout_s,
+            )
             if result.returncode != 0:
                 detail = (result.stderr or result.stdout).strip()
                 raise AdapterError(f"Codex review failed: {detail[:500]}")
