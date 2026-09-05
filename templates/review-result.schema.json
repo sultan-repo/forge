@@ -12,11 +12,12 @@
     "reviewed_commit",
     "cycle",
     "verdict",
+    "summary",
     "findings"
   ],
   "properties": {
     "schema_version": {"const": 1},
-    "packet_id": {"type": "string", "minLength": 1},
+    "packet_id": {"type": "string", "pattern": "^WP-[A-Za-z0-9._-]+$"},
     "baseline_revision": {"type": "integer", "minimum": 1},
     "plan_revision": {"type": "integer", "minimum": 1},
     "base_commit": {"type": "string", "minLength": 7},
@@ -35,8 +36,10 @@
           "confidence",
           "scope_relevance",
           "title",
+          "requirements",
           "evidence",
           "impact",
+          "root_cause",
           "correction",
           "validation"
         ],
@@ -49,7 +52,20 @@
           },
           "title": {"type": "string", "minLength": 1},
           "requirements": {"type": "array", "items": {"type": "string"}},
-          "evidence": {"type": "object", "additionalProperties": true},
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "source", "location", "detail"],
+              "properties": {
+                "kind": {"enum": ["code", "test", "runtime", "config", "requirement", "other"]},
+                "source": {"type": "string"},
+                "location": {"type": ["string", "null"]},
+                "detail": {"type": "string"}
+              }
+            }
+          },
           "impact": {"type": "string"},
           "root_cause": {"type": "string"},
           "correction": {"type": "string"},
