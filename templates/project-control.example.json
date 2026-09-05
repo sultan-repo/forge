@@ -43,7 +43,16 @@
       "return_to": "WP-1.2",
       "acceptance_status": "pending",
       "validation_status": "pending",
-      "reconciled": false
+      "reconciled": false,
+      "execution": {
+        "profile": "dual-agent-local",
+        "phase": "pending",
+        "cycle": 0,
+        "review_status": "not_started",
+        "packet_base_commit": null,
+        "implementation_commit": null,
+        "reviewed_commit": null
+      }
     },
     "WP-1.2": {
       "status": "planned",
