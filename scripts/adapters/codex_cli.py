@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import tempfile
 from pathlib import Path
+from typing import Any, cast
 
 from .base import AdapterError, AgentRun, require_binary, run_command
 
@@ -30,7 +31,7 @@ class CodexCLIReviewer:
             return False, "Codex CLI is too old for Forge's isolated reviewer mode. Update Codex CLI."
         return True, "Codex ready"
 
-    def review(self, prompt: str, cwd: Path, schema_path: Path) -> tuple[AgentRun, dict[str, object]]:
+    def review(self, prompt: str, cwd: Path, schema_path: Path) -> tuple[AgentRun, dict[str, Any]]:
         require_binary(self.binary)
         with tempfile.TemporaryDirectory(prefix="forge-codex-") as tmp:
             output_path = Path(tmp) / "review.json"
@@ -66,4 +67,4 @@ class CodexCLIReviewer:
                 raise AdapterError("Codex did not return a valid structured review") from exc
             if not isinstance(payload, dict):
                 raise AdapterError("Codex structured review must be a JSON object")
-        return result, payload
+        return result, cast(dict[str, Any], payload)
