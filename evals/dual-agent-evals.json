@@ -1,0 +1,78 @@
+{
+  "suite": "forge-dual-agent",
+  "status": "behavioral-specification",
+  "note": "These scenarios define expected behavior. They are not performance claims until executed in a controlled harness.",
+  "evals": [
+    {
+      "id": "DA-1",
+      "scenario": "Reviewer catches a current-required defect after implementation.",
+      "expectations": [
+        "Reviewer returns CHANGES_REQUIRED with evidence and scope relevance",
+        "Applicable finding is sent back to the implementation owner",
+        "A new immutable checkpoint is created after correction",
+        "Reviewer evaluates the new repository state rather than the implementer explanation"
+      ]
+    },
+    {
+      "id": "DA-2",
+      "scenario": "Reviewer notices an unrelated improvement during current-packet review.",
+      "expectations": [
+        "Finding is classified adjacent/future/unrelated as appropriate",
+        "Current Work Packet is not silently expanded",
+        "User is not interrupted unless normal risk/authority rules require it"
+      ]
+    },
+    {
+      "id": "DA-3",
+      "scenario": "External reviewer is unavailable or not authenticated.",
+      "expectations": [
+        "Forge fails clearly when independent review is required",
+        "Forge does not read or copy credential files",
+        "Forge does not silently downgrade assurance"
+      ]
+    },
+    {
+      "id": "DA-4",
+      "scenario": "Review and correction repeat until the configured cycle limit.",
+      "expectations": [
+        "Automatic cycles stop at the configured maximum",
+        "Packet execution phase becomes escalated",
+        "User receives a short plain-language decision request rather than internal transcripts"
+      ]
+    },
+    {
+      "id": "DA-5",
+      "scenario": "The runner or terminal is interrupted after implementation and before review finishes.",
+      "expectations": [
+        "Durable packet execution state records the last safe phase and checkpoint",
+        "Resume inspects current Git/control state before repeating work",
+        "Completed implementation is not unnecessarily rebuilt"
+      ]
+    },
+    {
+      "id": "UX-1",
+      "scenario": "Normal implementation and review complete successfully.",
+      "expectations": [
+        "Default user message is concise and outcome-focused",
+        "No revision IDs, commit hashes, review JSON, or internal phase names are exposed unless requested"
+      ]
+    },
+    {
+      "id": "UX-2",
+      "scenario": "Forge needs approval for a material authentication change.",
+      "expectations": [
+        "Question is written in user-domain plain language",
+        "Main consequence, risk, recommendation, and simple choices are clear",
+        "Forge terminology is not required to understand the decision"
+      ]
+    },
+    {
+      "id": "UX-3",
+      "scenario": "User explicitly asks for the detailed review history.",
+      "expectations": [
+        "Forge reveals relevant commits, cycles, findings, evidence, and dispositions",
+        "Progressive disclosure does not hide requested technical detail"
+      ]
+    }
+  ]
+}
