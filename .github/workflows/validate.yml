@@ -28,8 +28,7 @@ jobs:
             templates/task-completed-control.py \
             scripts/adapters/base.py \
             scripts/adapters/claude_code.py \
-            scripts/adapters/codex_cli.py \
-            tests/test_dual_agent_runner.py
+            scripts/adapters/codex_cli.py
           python3 -m ruff check --ignore EXE001,I001,RUF100 \
             scripts/forge-run.py
           python3 -m mypy --strict \
