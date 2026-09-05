@@ -33,6 +33,37 @@ def read_event() -> JsonObject:
     return value if isinstance(value, dict) else {}
 
 
+def read_json_object(path: Path) -> JsonObject | None:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def review_state(cwd: Path, packet_id: str, packet: JsonObject) -> JsonObject | None:
+    """Resolve review state without making dual-agent runtime state canonical project truth."""
+    execution = packet.get("execution")
+    if isinstance(execution, dict):
+        profile = execution.get("profile")
+        phase = execution.get("phase")
+        if execution.get("review_required") is True or profile == "dual-agent-local" or phase in {
+            "ready_for_review",
+            "reviewing",
+            "fixing",
+            "approved",
+            "escalated",
+            "reconcile_required",
+        }:
+            return execution
+
+    runtime_path = cwd / ".claude" / "forge" / "runtime" / "executions" / f"{packet_id}.json"
+    runtime = read_json_object(runtime_path)
+    if runtime is not None:
+        return runtime
+    return None
+
+
 def main() -> int:
     """Hook entry point."""
     event = read_event()
@@ -52,12 +83,9 @@ def main() -> int:
     if not state_path.exists():
         return fail(f"Forge: task references {packet_id}, but {state_path} is missing.")
 
-    try:
-        state_value = json.loads(state_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        return fail(f"Forge: cannot parse project control state: {exc}")
-    if not isinstance(state_value, dict):
-        return fail("Forge: project control state must contain a JSON object.")
+    state_value = read_json_object(state_path)
+    if state_value is None:
+        return fail("Forge: cannot parse project control state as a JSON object.")
 
     packet_map = state_value.get("work_packets", {})
     packet = packet_map.get(packet_id) if isinstance(packet_map, dict) else None
@@ -76,11 +104,14 @@ def main() -> int:
             detail = (completed.stderr or completed.stdout).strip()
             return fail(f"Forge: control state invalid before completing {packet_id}: {detail}")
 
-    execution = packet.get("execution")
-    if isinstance(execution, dict) and execution.get("review_required") is True:
-        if execution.get("phase") != "approved" or execution.get("review_status") != "passed":
+    execution = review_state(cwd, packet_id, packet)
+    if execution is not None:
+        if execution.get("phase") != "approved" or str(execution.get("review_status", "")) not in {
+            "passed",
+            "passed_with_deferred_findings",
+        }:
             return fail(f"Forge: {packet_id} requires independent review before completion.")
-        reviewed_commit = execution.get("reviewed_commit")
+        reviewed_commit = execution.get("reviewed_commit") or execution.get("implementation_commit")
         if not isinstance(reviewed_commit, str) or len(reviewed_commit) < 7:
             return fail(f"Forge: {packet_id} has no valid reviewed commit recorded.")
 
