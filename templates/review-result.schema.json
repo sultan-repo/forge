@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Forge Independent Review Result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "packet_id",
+    "baseline_revision",
+    "plan_revision",
+    "base_commit",
+    "reviewed_commit",
+    "cycle",
+    "verdict",
+    "findings"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "packet_id": {"type": "string", "minLength": 1},
+    "baseline_revision": {"type": "integer", "minimum": 1},
+    "plan_revision": {"type": "integer", "minimum": 1},
+    "base_commit": {"type": "string", "minLength": 7},
+    "reviewed_commit": {"type": "string", "minLength": 7},
+    "cycle": {"type": "integer", "minimum": 1},
+    "verdict": {"enum": ["PASS", "CHANGES_REQUIRED", "ESCALATE"]},
+    "summary": {"type": "string"},
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "severity",
+          "confidence",
+          "scope_relevance",
+          "title",
+          "evidence",
+          "impact",
+          "correction",
+          "validation"
+        ],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "severity": {"enum": ["Critical", "High", "Medium", "Low"]},
+          "confidence": {"enum": ["High", "Medium", "Low"]},
+          "scope_relevance": {
+            "enum": ["current_required", "current_blocking", "adjacent", "future", "unrelated"]
+          },
+          "title": {"type": "string", "minLength": 1},
+          "requirements": {"type": "array", "items": {"type": "string"}},
+          "evidence": {"type": "object", "additionalProperties": true},
+          "impact": {"type": "string"},
+          "root_cause": {"type": "string"},
+          "correction": {"type": "string"},
+          "validation": {"type": "string"}
+        }
+      }
+    }
+  }
+}
