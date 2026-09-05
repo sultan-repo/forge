@@ -70,6 +70,22 @@ Use collaborative multi-agent mechanisms only when workers genuinely need peer c
 
 Fallback: independent workers returning to one controller, or sequential analysis.
 
+## External implementer / independent reviewer
+
+Forge may optionally use Claude Code as an implementation adapter while an external reviewer independently checks immutable Git checkpoints.
+
+In this mode:
+- Claude Code owns implementation edits for the active Work Packet
+- Forge/controller owns workflow state, checkpointing, review routing, reconciliation, and escalation
+- Claude Code must not mark its own packet independently approved
+- the reviewer receives canonical requirements/packet/revision/commit evidence, not Claude's private reasoning
+- review findings return through Forge rather than peer-to-peer agent control
+- normal user-facing feedback remains concise; detailed handoffs/review records stay internal unless requested
+
+The bundled runner uses Claude Code non-interactive print mode and the project's existing CLI authentication/environment. Forge does not read, copy, store, or commit Claude authentication material.
+
+This role assignment is a provided profile, not a permanent Forge assumption. Other adapters may reverse or replace roles in the future without changing the methodology.
+
 ## Verification / review / goal capabilities
 
 Use native verification, review, or goal mechanisms when available, but define their target from Forge requirements and acceptance criteria.
