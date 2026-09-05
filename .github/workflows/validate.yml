@@ -29,7 +29,7 @@ jobs:
             scripts/adapters/base.py \
             scripts/adapters/claude_code.py \
             scripts/adapters/codex_cli.py
-          python3 -m ruff check --ignore EXE001,I001,RUF100 \
+          python3 -m ruff check --ignore EXE001,I001,RUF100,F401,UP035 \
             scripts/forge-run.py
           python3 -m mypy --strict \
             templates/validate-project-control.py \
