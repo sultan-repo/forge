@@ -76,6 +76,14 @@ def main() -> int:
             detail = (completed.stderr or completed.stdout).strip()
             return fail(f"Forge: control state invalid before completing {packet_id}: {detail}")
 
+    execution = packet.get("execution")
+    if isinstance(execution, dict) and execution.get("review_required") is True:
+        if execution.get("phase") != "approved" or execution.get("review_status") != "passed":
+            return fail(f"Forge: {packet_id} requires independent review before completion.")
+        reviewed_commit = execution.get("reviewed_commit")
+        if not isinstance(reviewed_commit, str) or len(reviewed_commit) < 7:
+            return fail(f"Forge: {packet_id} has no valid reviewed commit recorded.")
+
     if str(packet.get("acceptance_status", "")).lower() not in COMPLETED_STATUSES:
         return fail(f"Forge: {packet_id} acceptance_status is not complete.")
     if str(packet.get("validation_status", "")).lower() not in COMPLETED_STATUSES:
