@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Forge External Execution Profile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "profile", "roles", "review", "interaction", "history"],
+  "properties": {
+    "version": {"const": 1},
+    "profile": {"type": "string", "minLength": 1},
+    "roles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["implementer", "reviewer"],
+      "properties": {
+        "implementer": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["adapter", "authentication"],
+          "properties": {
+            "adapter": {"const": "claude-code-cli"},
+            "authentication": {"const": "inherited"}
+          }
+        },
+        "reviewer": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["adapter", "authentication", "write_access"],
+          "properties": {
+            "adapter": {"const": "codex-cli"},
+            "authentication": {"const": "inherited"},
+            "write_access": {"const": false}
+          }
+        }
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_cycles", "checkpoint_required", "independent", "on_reviewer_unavailable"],
+      "properties": {
+        "max_cycles": {"type": "integer", "minimum": 1, "maximum": 10},
+        "checkpoint_required": {"const": true},
+        "independent": {"const": true},
+        "on_reviewer_unavailable": {"const": "stop"}
+      }
+    },
+    "interaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["detail", "progress"],
+      "properties": {
+        "detail": {"enum": ["simple", "verbose"]},
+        "progress": {"enum": ["concise", "verbose"]}
+      }
+    },
+    "history": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": {"enabled": {"type": "boolean"}}
+    }
+  }
+}
