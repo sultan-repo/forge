@@ -284,9 +284,10 @@ def test_external_change_during_review_is_not_approved(tmp_path: Path, monkeypat
         (repo / "external.txt").write_text("not reviewed\n", encoding="utf-8")
 
     install_fakes(monkeypatch, Implementer(), Reviewer(action=external_change))
-    with pytest.raises(runner.ForgeRunnerError, match="changed while it was being reviewed"):
-        runner.run_packet(repo, control, "WP-1.1", profile(), False)
-    assert execution(repo, control)["phase"] != "approved"
+    assert runner.run_packet(repo, control, "WP-1.1", profile(), False) == 2
+    state = execution(repo, control)
+    assert state["phase"] == "escalated"
+    assert state["review_status"] == "stale"
 
 
 def test_changed_source_on_resume_is_rejected(tmp_path: Path, monkeypatch) -> None:
