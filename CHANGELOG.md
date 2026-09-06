@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- makes independent Codex review request high reasoning effort per run without pinning a transient model name; unsupported effort fails closed instead of silently weakening review
 - makes skill invocation, bootstrap updates, help mode, and lifecycle-hook limits explicit; links all reference modules from the relevant guidance
 - validates skill identity and invocation settings inside actual frontmatter before replacing an installation
 - keeps status available during execution, revalidates saved correction reviews, and checks reduced cycle limits before dispatching more work
