@@ -8,6 +8,8 @@ from typing import Any, cast
 
 from .base import AdapterError, AgentRun, require_binary, run_command
 
+DEFAULT_REVIEW_REASONING_EFFORT = "high"
+
 
 def failure_detail(result: AgentRun) -> str:
     """Keep the terminal failure instead of truncating at startup diagnostics."""
@@ -33,9 +35,15 @@ def failure_detail(result: AgentRun) -> str:
 class CodexCLIReviewer:
     name = "codex-cli"
 
-    def __init__(self, binary: str = "codex", timeout_s: int = 3600) -> None:
+    def __init__(
+        self,
+        binary: str = "codex",
+        timeout_s: int = 3600,
+        reasoning_effort: str = DEFAULT_REVIEW_REASONING_EFFORT,
+    ) -> None:
         self.binary = binary
         self.timeout_s = timeout_s
+        self.reasoning_effort = reasoning_effort
 
     def doctor(self, cwd: Path) -> tuple[bool, str]:
         try:
@@ -47,7 +55,7 @@ class CodexCLIReviewer:
             return False, "Codex is not signed in. Run `codex login`."
         help_result = run_command([self.binary, "exec", "--help"], cwd=cwd, timeout_s=30)
         help_text = f"{help_result.stdout}\n{help_result.stderr}"
-        required_flags = ("--ignore-user-config", "--ignore-rules", "--output-schema")
+        required_flags = ("--config", "--ignore-user-config", "--ignore-rules", "--output-schema")
         if help_result.returncode != 0 or any(flag not in help_text for flag in required_flags):
             return False, "Codex CLI is too old for Forge's isolated reviewer mode. Update Codex CLI."
         return True, "Codex ready"
@@ -63,6 +71,8 @@ class CodexCLIReviewer:
                     "never",
                     "exec",
                     "--json",
+                    "--config",
+                    f'model_reasoning_effort="{self.reasoning_effort}"',
                     "--cd",
                     str(cwd),
                     "--sandbox",
