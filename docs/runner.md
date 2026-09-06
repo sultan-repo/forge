@@ -53,6 +53,8 @@ A custom control path must remain inside the project's `.claude/` directory. Kee
 
 If the project profile is absent, the runner uses the bundled example defaults: Claude Code implementation, Codex review, up to three review cycles, and no fallback when a reviewer is unavailable. A project profile makes these choices explicit. Set `interaction.progress` or `interaction.detail` to `verbose` for phase progress or approval evidence details; `--verbose` enables both. Only the currently supported adapters and inherited authentication are accepted; this is not a general provider configuration system.
 
+The Codex reviewer intentionally leaves the model name unpinned so Forge does not encode a transient model catalog. Each review process explicitly requests `model_reasoning_effort="high"` through Codex's per-run configuration while continuing to ignore user/project Codex configuration for review isolation. If the active Codex model or provider cannot honor that effort, the review stops with the provider diagnostic instead of silently weakening the review.
+
 ## Account selection and CLI compatibility
 
 Forge inherits the environment and authentication of the CLIs it launches. In Claude's non-interactive mode, an exported `ANTHROPIC_API_KEY` takes precedence over a Claude Pro/Max login and uses API billing. A low API credit balance therefore does not establish that the subscription is exhausted. See [Claude's authentication precedence](https://code.claude.com/docs/en/authentication#authentication-precedence).
