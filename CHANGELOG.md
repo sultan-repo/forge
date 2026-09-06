@@ -9,6 +9,10 @@
 - rejects malformed Plan Delta identities and nonpositive revisions, removes repeated shape checks, and corrects the example's requirement-to-packet mapping
 - scores committed B3 handoffs against the original fixture and records reported model IDs separately from the requested model setting
 - clarifies release publication checks and their non-atomic boundary
+- preserves non-UTF-8 file content and exact Git path bytes through runner checkpoints and completion checks
+- retains deferred findings with cycle provenance, keeps doctor from modifying Git exclusions, and reports platform/interrupt failures clearly
+- makes independent review an explicit choice in the starter control example and distinguishes skill commands from shell runner commands
+- validates all distributed schemas and their examples in tests, exercises installation rollback with system-style command paths, and removes an unused scorer constant
 
 ## 1.9.0
 

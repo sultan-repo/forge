@@ -38,11 +38,13 @@ Deadlines and elapsed time use Python, so GNU `timeout` and nanosecond `date` ex
 ```bash
 export ANTHROPIC_API_KEY=...
 bash evals/core/run.sh --runs 5
-FORGE_REF=v1.7.0 bash evals/core/run.sh --runs 5
-CLAUDE_CODE_CHANNEL=<exact-version> bash evals/core/run.sh --runs 5
+FORGE_REF="v$(cat VERSION)" bash evals/core/run.sh --runs 5
+CLAUDE_CODE_CHANNEL="<exact-version>" bash evals/core/run.sh --runs 5
 ```
 
 A normal 5-run matrix is 4 scenarios × 2 arms × 5 = 40 benchmark cells. B3 uses two fresh agent sessions per cell, so the number of Claude invocations is higher than the cell count.
+
+The `FORGE_REF` example selects this checkout's [VERSION](../../VERSION), which must already have a published stable release. Omit `FORGE_REF` to select the latest stable release.
 
 Run these commands from the repository root. Output defaults to `evals/core/results/<UTC timestamp>-<unique suffix>/REPORT.md` plus per-run evidence: final repo, diff, prompts, transcripts, stderr, metadata, deterministic score, and B3 Stage-1 handoff score where applicable. `--out` and `FORGE_DIR` paths are relative to the caller's working directory. Fixtures are built inside each output directory, allowing independent concurrent matrices. Matrices must use different empty output directories.
 

@@ -1,12 +1,15 @@
 """Real staged installation and distribution validation; no user installation touched."""
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
+import jsonschema
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,11 +26,21 @@ def package(tmp_path):
 
 def install(source, destination, *, extra_env=None, entrypoint="install.sh"):
     env = dict(os.environ, CLAUDE_SKILLS_DIR=str(destination), PYTHONPYCACHEPREFIX=str(destination.parent / "cache"))
+    # Default to the test interpreter; explicit command proxies take precedence.
+    env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env["PATH"]
     if extra_env:
         env.update(extra_env)
-    # Exercise the same interpreter used to validate in CI, even outside an activated venv.
-    env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env["PATH"]
     return subprocess.run(["bash", str(source / "scripts" / entrypoint)], env=env, text=True, capture_output=True, check=False)
+
+
+@pytest.mark.parametrize("name", ["project-control", "execution-profile", "implementation-handoff", "review-result"])
+def test_distributed_schemas_and_examples_remain_valid(name):
+    schema = json.loads((ROOT / "templates" / f"{name}.schema.json").read_text())
+    schema_validator = jsonschema.validators.validator_for(schema)
+    schema_validator.check_schema(schema)
+    example = ROOT / "templates" / f"{name}.example.json"
+    if example.exists():
+        schema_validator(schema).validate(json.loads(example.read_text()))
 
 
 def test_installed_package_validates_and_preserves_previous_install(package, tmp_path):
@@ -159,7 +172,15 @@ def test_validator_ignores_local_benchmark_results(package):
     assert result.returncode == 0, result.stderr
 
 
-def test_failed_final_move_restores_previous_install_under_lock(package, tmp_path):
+@pytest.mark.parametrize("shared_interpreter_bin", [False, True])
+def test_failed_final_move_restores_previous_install_under_lock(package, tmp_path, monkeypatch, shared_interpreter_bin):
+    if shared_interpreter_bin:
+        # System interpreters can share a bin directory with mv; venvs usually do not.
+        interpreter_bin = tmp_path / "system-bin"
+        interpreter_bin.mkdir()
+        (interpreter_bin / "python3").symlink_to(sys.executable)
+        (interpreter_bin / "mv").symlink_to(shutil.which("mv"))
+        monkeypatch.setattr(sys.modules[__name__], "sys", SimpleNamespace(executable=str(interpreter_bin / "python3")))
     skills = tmp_path / "skills"
     previous = skills / "forge"
     previous.mkdir(parents=True)

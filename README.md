@@ -82,6 +82,8 @@ After Forge is installed, you can use natural language or the skill commands bel
 /forge help
 ```
 
+These commands run inside Claude Code. `/forge status` summarizes the project; the optional shell runner's `status` checks one packet's execution and review state. The shell runner has `doctor`, `run`, and `status` commands, with `--help` for usage. See the [runner guide](docs/runner.md).
+
 Natural language works too:
 
 ```text

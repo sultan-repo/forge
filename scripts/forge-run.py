@@ -71,23 +71,33 @@ def run_local(
     input_text: str | None = None,
     timeout_s: int | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
+    completed = subprocess.run(
         command,
         cwd=cwd,
-        input=input_text,
+        input=input_text.encode("utf-8", "surrogateescape") if input_text is not None else None,
         capture_output=True,
-        text=True,
         timeout=timeout_s,
         check=False,
     )
+    return subprocess.CompletedProcess(
+        command,
+        completed.returncode,
+        completed.stdout.decode("utf-8", "surrogateescape"),
+        completed.stderr.decode("utf-8", "surrogateescape"),
+    )
+
+
+def git_bytes(cwd: Path, *args: str, check: bool = True) -> bytes:
+    completed = subprocess.run(["git", *args], cwd=cwd, capture_output=True, check=False)
+    if check and completed.returncode != 0:
+        detail = os.fsdecode(completed.stderr or completed.stdout).strip()
+        raise ForgeRunnerError(f"Git check failed: {detail[:400]}")
+    return completed.stdout
 
 
 def git(cwd: Path, *args: str, check: bool = True, strip: bool = True) -> str:
-    completed = run_local(["git", *args], cwd)
-    if check and completed.returncode != 0:
-        detail = (completed.stderr or completed.stdout).strip()
-        raise ForgeRunnerError(f"Git check failed: {detail[:400]}")
-    return completed.stdout.strip() if strip else completed.stdout
+    output = os.fsdecode(git_bytes(cwd, *args, check=check))
+    return output.strip() if strip else output
 
 
 def repo_root(start: Path) -> Path:
@@ -159,6 +169,10 @@ def ensure_runtime_excluded(root: Path) -> None:
 
 @contextmanager
 def execution_lock(root: Path) -> Iterator[None]:
+    try:
+        import fcntl
+    except ImportError as exc:
+        raise ForgeRunnerError("Forge runner locking requires macOS or Linux (fcntl is unavailable).") from exc
     common = Path(git(root, "rev-parse", "--git-common-dir"))
     if not common.is_absolute():
         common = (root / common).resolve()
@@ -167,10 +181,8 @@ def execution_lock(root: Path) -> Iterator[None]:
     handle = lock_path.open("a+", encoding="utf-8")
     try:
         try:
-            import fcntl
-
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except (ImportError, BlockingIOError) as exc:
+        except BlockingIOError as exc:
             raise ForgeRunnerError("Another Forge runner is already active for this repository.") from exc
         handle.seek(0)
         handle.truncate()
@@ -179,10 +191,8 @@ def execution_lock(root: Path) -> Iterator[None]:
         yield
     finally:
         try:
-            import fcntl
-
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-        except (ImportError, OSError):
+        except OSError:
             pass
         handle.close()
 
@@ -434,7 +444,7 @@ def worktree_changes(root: Path) -> list[str]:
     )
     if completed.returncode != 0:
         raise ForgeRunnerError("Could not inspect repository changes.")
-    raw = completed.stdout.decode("utf-8", errors="replace")
+    raw = os.fsdecode(completed.stdout)
     items = [item for item in raw.split("\0") if item]
     paths: list[str] = []
     index = 0
@@ -458,7 +468,7 @@ def worktree_fingerprint(root: Path) -> str:
     digest = hashlib.sha256()
     # HEAD..worktree includes both staged and unstaged tracked changes. Git's binary
     # format preserves content changes that a filename-only status would miss.
-    digest.update(git(root, "diff", "--binary", "--no-ext-diff", "HEAD", "--").encode())
+    digest.update(git_bytes(root, "diff", "--binary", "--no-ext-diff", "HEAD", "--"))
     for relative in sorted(worktree_changes(root)):
         path = root / relative
         digest.update(os.fsencode(relative) + b"\0")
@@ -480,8 +490,8 @@ def commit_all_changes(root: Path, message: str) -> str:
 
 
 def changed_files(root: Path, base: str, head: str) -> list[str]:
-    output = git(root, "diff", "--name-only", "--no-renames", "-z", f"{base}..{head}", "--", strip=False)
-    return [path for path in output.split("\0") if path]
+    output = git_bytes(root, "diff", "--name-only", "--no-renames", "-z", f"{base}..{head}", "--")
+    return [os.fsdecode(path) for path in output.split(b"\0") if path]
 
 
 def capture_invalid_control(root: Path, packet_id: str, candidate: str) -> Path:
@@ -787,11 +797,12 @@ def persist_deferred_findings(root: Path, packet_id: str, review: dict[str, Any]
         raw = value.get("findings", [])
         if isinstance(raw, list):
             existing = [item for item in raw if isinstance(item, dict)]
-    seen = {str(item.get("id")) for item in existing}
+    seen = {(item.get("cycle"), str(item.get("id"))) for item in existing}
     for finding in findings:
-        if str(finding.get("id")) not in seen:
-            existing.append(finding)
-            seen.add(str(finding.get("id")))
+        identity = (review["cycle"], str(finding.get("id")))
+        if identity not in seen:
+            existing.append({**finding, "cycle": review["cycle"]})
+            seen.add(identity)
     atomic_json(
         path,
         {
@@ -1348,12 +1359,15 @@ def main(argv: list[str] | None = None) -> int:
         control_path = resolve_control_path(root, args.control)
         if args.command == "status":
             return status(root, control_path, args.packet, args.verbose)
-        ensure_runtime_excluded(root)
         with execution_lock(root):
             if args.command == "doctor":
                 return doctor(root, control_path, args.verbose)
+            ensure_runtime_excluded(root)
             profile = load_profile(root)
             return run_packet(root, control_path, args.packet, profile, args.verbose)
+    except KeyboardInterrupt:
+        print("Forge was interrupted. Inspect status before retrying the Work Packet.", file=sys.stderr)
+        return 130
     except (ForgeRunnerError, AdapterError, subprocess.TimeoutExpired) as exc:
         print(str(exc), file=sys.stderr)
         return 2

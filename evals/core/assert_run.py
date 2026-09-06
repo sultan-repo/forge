@@ -16,7 +16,6 @@ from pathlib import Path
 
 from fixture_bundle import load_bundle
 
-HERE = Path(__file__).resolve().parent
 BUNDLE = load_bundle()
 
 REQS_BY_MILESTONE = {

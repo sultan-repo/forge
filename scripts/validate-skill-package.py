@@ -214,6 +214,7 @@ required = [
     "templates/implementation-handoff.schema.json",
     "templates/review-result.schema.json",
     "templates/session-start-control.py",
+    "templates/settings-control-hooks.example.json",
     "templates/task-completed-control.py",
     "docs/RELEASING.md",
     "docs/runner.md",
