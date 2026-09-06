@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -61,6 +62,19 @@ def test_reference_cycles_are_rejected(relation):
     assert any("cycle" in error for error in validator.validate_state(state)[0])
 
 
+@pytest.mark.parametrize("delta", [
+    {"id": ["PD-1"], "from_plan_revision": 1, "to_plan_revision": 2},
+    {"id": " ", "from_plan_revision": 1, "to_plan_revision": 2},
+    {"id": "PD-1", "from_plan_revision": 0, "to_plan_revision": 1},
+    {"id": "PD-1", "from_plan_revision": -1, "to_plan_revision": 0},
+])
+def test_plan_delta_requires_text_identity_and_positive_revisions(delta):
+    state = copy.deepcopy(EXAMPLE)
+    state["plan_revision"] = 2
+    state["plan_deltas"] = [delta]
+    assert validator.validate_state(state)[0]
+
+
 def test_session_orientation_survives_bad_arrays():
     spec = importlib.util.spec_from_file_location("orientation", ROOT / "templates/session-start-control.py")
     assert spec and spec.loader
@@ -85,6 +99,7 @@ def reviewed_project(tmp_path):
     control.parent.mkdir()
     state = copy.deepcopy(EXAMPLE)
     state["work_packets"]["WP-1.1"].update(acceptance_status="passed", validation_status="passed", reconciled=True)
+    state["work_packets"]["WP-1.1"]["execution"] = {"profile": "dual-agent-local", "phase": "pending"}
     control.write_text(json.dumps(state))
     (root / "app.txt").write_text("reviewed source")
     git("add", "-A")
@@ -103,11 +118,27 @@ def completion(root):
                           text=True, capture_output=True, check=False)
 
 
-def test_runtime_review_overrides_example_pending_extension(reviewed_project):
+def test_runtime_review_overrides_pending_opt_in(reviewed_project):
     assert completion(reviewed_project[0]).returncode == 0
 
 
-@pytest.mark.parametrize("change", ["source", "staged", "commit", "untracked", "revision", "malformed_runtime", "fictitious_commit", "wrong_packet", "implementation_only", "boolean_revision", "renamed_source", "wrong_control"])
+@pytest.mark.parametrize("review_required", [False, True])
+def test_completed_default_example_supports_optional_review(tmp_path, review_required):
+    control = tmp_path / ".claude/project-control.json"
+    control.parent.mkdir()
+    state = copy.deepcopy(EXAMPLE)
+    packet = state["work_packets"]["WP-1.1"]
+    packet.update(acceptance_status="passed", validation_status="passed", reconciled=True)
+    if review_required:
+        packet["execution"] = {"review_required": True}
+    control.write_text(json.dumps(state))
+    result = completion(tmp_path)
+    assert result.returncode == (2 if review_required else 0), result.stderr
+    if review_required:
+        assert "requires independent review" in result.stderr
+
+
+@pytest.mark.parametrize("change", ["source", "staged", "commit", "untracked", "non_utf8_path", "revision", "malformed_runtime", "fictitious_commit", "wrong_packet", "implementation_only", "boolean_revision", "renamed_source", "wrong_control"])
 def test_completion_rejects_stale_or_invalid_review(reviewed_project, change):
     root, control, runtime, git = reviewed_project
     if change in {"source", "staged", "commit"}:
@@ -118,6 +149,10 @@ def test_completion_rejects_stale_or_invalid_review(reviewed_project, change):
             git("commit", "-qm", "later edit")
     elif change == "untracked":
         (root / "new.py").write_text("unreviewed = True")
+    elif change == "non_utf8_path":
+        # A Git index can carry byte paths even where the filesystem requires UTF-8.
+        name = os.fsdecode(b"unreviewed-\xff.txt")
+        git("update-index", "--add", "--cacheinfo", f"100644,{git('rev-parse', 'HEAD:app.txt')},{name}")
     elif change == "revision":
         state = json.loads(control.read_text())
         state["plan_revision"] = 2
@@ -139,7 +174,9 @@ def test_completion_rejects_stale_or_invalid_review(reviewed_project, change):
         else:
             state["reviewed_commit"] = "f" * 40
         runtime.write_text(json.dumps(state))
-    assert completion(root).returncode == 2
+    result = completion(root)
+    assert result.returncode == 2, result.stderr
+    assert "Traceback" not in result.stderr
 
 
 def test_reconciliation_only_edits_keep_review_valid(reviewed_project):

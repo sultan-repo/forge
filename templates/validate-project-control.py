@@ -147,31 +147,10 @@ def validate_state(state: ControlState) -> tuple[list[str], list[str]]:
     if state.get("version") != 3:
         errors.append("version must be 3")
 
-    for key in ("baseline_revision", "plan_revision"):
-        value = state.get(key)
-        if type(value) is not int or value < 1:
-            errors.append(f"{key} must be integer >= 1")
-
-    for key in (
-        "active_milestones",
-        "active_work_packets",
-        "resume_queue",
-        "plan_deltas",
-        "archived_plan_deltas",
-    ):
-        if not isinstance(state.get(key), list):
-            errors.append(f"{key} must be an array")
-
-    for key in ("requirements", "milestones", "work_packets", "gates"):
-        if not isinstance(state.get(key), dict):
-            errors.append(f"{key} must be an object")
-
-    requirements = state.get("requirements", {})
-    milestones = state.get("milestones", {})
-    work_packets = state.get("work_packets", {})
-
-    if not isinstance(requirements, dict) or not isinstance(milestones, dict) or not isinstance(work_packets, dict):
-        return errors, warnings
+    # Shapes are established above; this phase checks meanings and references.
+    requirements = state["requirements"]
+    milestones = state["milestones"]
+    work_packets = state["work_packets"]
 
     for requirement_id, requirement_value in requirements.items():
         if not isinstance(requirement_value, dict):
@@ -294,21 +273,22 @@ def validate_state(state: ControlState) -> tuple[list[str], list[str]]:
             errors.append("plan delta must be an object")
             continue
         delta_id = delta.get("id")
-        if not delta_id:
-            errors.append("plan delta missing id")
-        elif str(delta_id) in seen_delta_ids:
+        if not isinstance(delta_id, str) or not delta_id.strip():
+            errors.append("plan delta id must be a nonempty string")
+        elif delta_id in seen_delta_ids:
             errors.append(f"duplicate active plan delta id {delta_id}")
         else:
-            seen_delta_ids.add(str(delta_id))
+            seen_delta_ids.add(delta_id)
 
         from_revision = delta.get("from_plan_revision")
         to_revision = delta.get("to_plan_revision")
         if (
             type(from_revision) is not int
             or type(to_revision) is not int
+            or from_revision < 1
             or to_revision != from_revision + 1
         ):
-            errors.append(f"plan delta {delta_id or '?'}: revisions must be consecutive integers")
+            errors.append(f"plan delta {delta_id or '?'}: revisions must be consecutive positive integers")
         if isinstance(to_revision, int):
             last_to = max(last_to, to_revision)
 

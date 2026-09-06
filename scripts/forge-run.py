@@ -71,23 +71,33 @@ def run_local(
     input_text: str | None = None,
     timeout_s: int | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
+    completed = subprocess.run(
         command,
         cwd=cwd,
-        input=input_text,
+        input=input_text.encode("utf-8", "surrogateescape") if input_text is not None else None,
         capture_output=True,
-        text=True,
         timeout=timeout_s,
         check=False,
     )
+    return subprocess.CompletedProcess(
+        command,
+        completed.returncode,
+        completed.stdout.decode("utf-8", "surrogateescape"),
+        completed.stderr.decode("utf-8", "surrogateescape"),
+    )
+
+
+def git_bytes(cwd: Path, *args: str, check: bool = True) -> bytes:
+    completed = subprocess.run(["git", *args], cwd=cwd, capture_output=True, check=False)
+    if check and completed.returncode != 0:
+        detail = os.fsdecode(completed.stderr or completed.stdout).strip()
+        raise ForgeRunnerError(f"Git check failed: {detail[:400]}")
+    return completed.stdout
 
 
 def git(cwd: Path, *args: str, check: bool = True, strip: bool = True) -> str:
-    completed = run_local(["git", *args], cwd)
-    if check and completed.returncode != 0:
-        detail = (completed.stderr or completed.stdout).strip()
-        raise ForgeRunnerError(f"Git check failed: {detail[:400]}")
-    return completed.stdout.strip() if strip else completed.stdout
+    output = os.fsdecode(git_bytes(cwd, *args, check=check))
+    return output.strip() if strip else output
 
 
 def repo_root(start: Path) -> Path:
@@ -128,9 +138,15 @@ def read_json(path: Path) -> dict[str, Any]:
 
 def atomic_json(path: Path, value: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    tmp.replace(path)
+    descriptor, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    tmp = Path(name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(value, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+        tmp.replace(path)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def git_path(root: Path, relative: str) -> Path:
@@ -153,6 +169,10 @@ def ensure_runtime_excluded(root: Path) -> None:
 
 @contextmanager
 def execution_lock(root: Path) -> Iterator[None]:
+    try:
+        import fcntl
+    except ImportError as exc:
+        raise ForgeRunnerError("Forge runner locking requires macOS or Linux (fcntl is unavailable).") from exc
     common = Path(git(root, "rev-parse", "--git-common-dir"))
     if not common.is_absolute():
         common = (root / common).resolve()
@@ -161,10 +181,8 @@ def execution_lock(root: Path) -> Iterator[None]:
     handle = lock_path.open("a+", encoding="utf-8")
     try:
         try:
-            import fcntl
-
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except (ImportError, BlockingIOError) as exc:
+        except BlockingIOError as exc:
             raise ForgeRunnerError("Another Forge runner is already active for this repository.") from exc
         handle.seek(0)
         handle.truncate()
@@ -173,38 +191,46 @@ def execution_lock(root: Path) -> Iterator[None]:
         yield
     finally:
         try:
-            import fcntl
-
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-        except (ImportError, OSError):
+        except OSError:
             pass
         handle.close()
 
 
+def runtime_path(root: Path, *parts: str) -> Path:
+    base = root.resolve() / RUNTIME_DIR
+    path = base.joinpath(*parts)
+    try:
+        path.resolve().relative_to(base)
+    except (ValueError, OSError, RuntimeError) as exc:
+        raise ForgeRunnerError("Forge runtime paths must stay inside .claude/forge/runtime; inspect symbolic links.") from exc
+    return path
+
+
 def runtime_state_path(root: Path, packet_id: str) -> Path:
     validate_packet_id(packet_id)
-    return root / RUNTIME_DIR / "executions" / f"{packet_id}.json"
+    return runtime_path(root, "executions", f"{packet_id}.json")
 
 
 def review_result_path(root: Path, packet_id: str, cycle: int) -> Path:
     validate_packet_id(packet_id)
-    return root / RUNTIME_DIR / "reviews" / f"{packet_id}-review-{cycle:02d}.json"
+    return runtime_path(root, "reviews", f"{packet_id}-review-{cycle:02d}.json")
 
 
 def handoff_path(root: Path, packet_id: str, cycle: int) -> Path:
     validate_packet_id(packet_id)
-    return root / RUNTIME_DIR / "handoffs" / f"{packet_id}-cycle-{cycle:02d}.json"
+    return runtime_path(root, "handoffs", f"{packet_id}-cycle-{cycle:02d}.json")
 
 
 def deferred_findings_path(root: Path, packet_id: str) -> Path:
     validate_packet_id(packet_id)
-    return root / RUNTIME_DIR / "deferred-findings" / f"{packet_id}.json"
+    return runtime_path(root, "deferred-findings", f"{packet_id}.json")
 
 
 def append_history(root: Path, event: dict[str, Any], enabled: bool = True) -> None:
     if not enabled:
         return
-    path = root / RUNTIME_DIR / "history.jsonl"
+    path = runtime_path(root, "history.jsonl")
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps({"at": utc_now(), **event}, sort_keys=True) + "\n")
@@ -418,7 +444,7 @@ def worktree_changes(root: Path) -> list[str]:
     )
     if completed.returncode != 0:
         raise ForgeRunnerError("Could not inspect repository changes.")
-    raw = completed.stdout.decode("utf-8", errors="replace")
+    raw = os.fsdecode(completed.stdout)
     items = [item for item in raw.split("\0") if item]
     paths: list[str] = []
     index = 0
@@ -442,7 +468,7 @@ def worktree_fingerprint(root: Path) -> str:
     digest = hashlib.sha256()
     # HEAD..worktree includes both staged and unstaged tracked changes. Git's binary
     # format preserves content changes that a filename-only status would miss.
-    digest.update(git(root, "diff", "--binary", "--no-ext-diff", "HEAD", "--").encode())
+    digest.update(git_bytes(root, "diff", "--binary", "--no-ext-diff", "HEAD", "--"))
     for relative in sorted(worktree_changes(root)):
         path = root / relative
         digest.update(os.fsencode(relative) + b"\0")
@@ -464,12 +490,12 @@ def commit_all_changes(root: Path, message: str) -> str:
 
 
 def changed_files(root: Path, base: str, head: str) -> list[str]:
-    output = git(root, "diff", "--name-only", "--no-renames", "-z", f"{base}..{head}", "--", strip=False)
-    return [path for path in output.split("\0") if path]
+    output = git_bytes(root, "diff", "--name-only", "--no-renames", "-z", f"{base}..{head}", "--")
+    return [os.fsdecode(path) for path in output.split(b"\0") if path]
 
 
 def capture_invalid_control(root: Path, packet_id: str, candidate: str) -> Path:
-    path = root / RUNTIME_DIR / "invalid-control" / f"{packet_id}-{utc_now().replace(':', '')}.json.txt"
+    path = runtime_path(root, "invalid-control", f"{packet_id}-{utc_now().replace(':', '')}.json.txt")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(candidate, encoding="utf-8")
     return path
@@ -771,11 +797,12 @@ def persist_deferred_findings(root: Path, packet_id: str, review: dict[str, Any]
         raw = value.get("findings", [])
         if isinstance(raw, list):
             existing = [item for item in raw if isinstance(item, dict)]
-    seen = {str(item.get("id")) for item in existing}
+    seen = {(item.get("cycle"), str(item.get("id"))) for item in existing}
     for finding in findings:
-        if str(finding.get("id")) not in seen:
-            existing.append(finding)
-            seen.add(str(finding.get("id")))
+        identity = (review["cycle"], str(finding.get("id")))
+        if identity not in seen:
+            existing.append({**finding, "cycle": review["cycle"]})
+            seen.add(identity)
     atomic_json(
         path,
         {
@@ -840,9 +867,24 @@ def control_from_checkout(checkout: Path, control_rel: Path) -> dict[str, Any]:
 
 def latest_completed_review(root: Path, packet_id: str, execution: dict[str, Any]) -> dict[str, Any]:
     number = execution.get("last_completed_review")
-    if not isinstance(number, int) or number < 1:
+    if type(number) is not int or number < 1 or number != execution.get("completed_reviews"):
         raise ForgeRunnerError("Cannot resume correction without a completed review.")
-    return read_json(review_result_path(root, packet_id, number))
+    checkpoint = execution.get("implementation_commit")
+    if not isinstance(checkpoint, str) or not checkpoint:
+        raise ForgeRunnerError("Cannot resume correction without its implementation checkpoint.")
+    review = read_json(review_result_path(root, packet_id, number))
+    validate_review_contract(
+        review,
+        packet_id=packet_id,
+        baseline_revision=execution["baseline_revision"],
+        plan_revision=execution["plan_revision"],
+        packet_base=execution["packet_base_commit"],
+        reviewed_commit=checkpoint,
+        cycle=number,
+    )
+    if review["verdict"] != "CHANGES_REQUIRED":
+        raise ForgeRunnerError("The saved review does not authorize an automatic correction.")
+    return review
 
 
 def write_handoff(
@@ -1009,6 +1051,13 @@ def run_packet(
     while True:
         phase = str(execution["phase"])
         if phase in {"pending", "implementing", "fixing"}:
+            if execution["completed_reviews"] >= max_cycles:
+                execution["phase"] = "escalated"
+                execution["review_status"] = "cycle_limit"
+                execution["reason"] = "The automatic review limit was reached."
+                save_execution_state(root, packet_id, execution)
+                print("The automatic review limit was reached. Your decision is needed.")
+                return 2
             findings: list[dict[str, Any]] | None = None
             if phase == "fixing":
                 previous = latest_completed_review(root, packet_id, execution)
@@ -1026,10 +1075,12 @@ def run_packet(
                 save_execution_state(root, packet_id, execution)
             elif phase == "implementing":
                 correction_review = execution.get("correction_from_review")
-                if isinstance(correction_review, int) and correction_review > 0:
-                    findings = current_findings(
-                        read_json(review_result_path(root, packet_id, correction_review))
-                    )
+                if correction_review is not None:
+                    if type(correction_review) is not int or correction_review != execution.get("last_completed_review"):
+                        raise ForgeRunnerError("The saved correction review identity is invalid.")
+                    findings = current_findings(latest_completed_review(root, packet_id, execution))
+                    if not findings:
+                        raise ForgeRunnerError("Cannot resume correction without current-scope review findings.")
 
             dispatch_state = load_valid_control(root, control_path)
             choose_packet(dispatch_state, packet_id)
@@ -1191,7 +1242,7 @@ def run_packet(
             try:
                 assert_review_target_unchanged(root, reviewed_commit)
             except ForgeRunnerError as exc:
-                stale_path = root / RUNTIME_DIR / "stale-reviews" / f"{packet_id}-review-{cycle:02d}.json"
+                stale_path = runtime_path(root, "stale-reviews", f"{packet_id}-review-{cycle:02d}.json")
                 atomic_json(stale_path, review)
                 execution["phase"] = "escalated"
                 execution["review_status"] = "stale"
@@ -1306,14 +1357,17 @@ def main(argv: list[str] | None = None) -> int:
     try:
         root = repo_root(Path.cwd())
         control_path = resolve_control_path(root, args.control)
-        ensure_runtime_excluded(root)
+        if args.command == "status":
+            return status(root, control_path, args.packet, args.verbose)
         with execution_lock(root):
             if args.command == "doctor":
                 return doctor(root, control_path, args.verbose)
-            if args.command == "status":
-                return status(root, control_path, args.packet, args.verbose)
+            ensure_runtime_excluded(root)
             profile = load_profile(root)
             return run_packet(root, control_path, args.packet, profile, args.verbose)
+    except KeyboardInterrupt:
+        print("Forge was interrupted. Inspect status before retrying the Work Packet.", file=sys.stderr)
+        return 130
     except (ForgeRunnerError, AdapterError, subprocess.TimeoutExpired) as exc:
         print(str(exc), file=sys.stderr)
         return 2

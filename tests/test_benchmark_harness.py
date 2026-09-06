@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -20,12 +21,12 @@ containers = importlib.import_module("container_run")
 entrypoint = importlib.import_module("score_entrypoint")
 
 
-def harness(arguments: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+def harness(arguments: list[str], cwd: Path, runner: Path = CORE / "run.sh") -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env["PATH"]
     env["BENCH_MOCK_AGENT"] = "reference"
     return subprocess.run(
-        ["bash", str(CORE / "run.sh"), *arguments], cwd=cwd, env=env,
+        ["bash", str(runner), *arguments], cwd=cwd, env=env,
         capture_output=True, text=True, timeout=90, check=False,
     )
 
@@ -134,11 +135,51 @@ def test_b3_handoff_must_correct_inherited_false_fix_claim(tmp_path: Path) -> No
     assert after["pass"], after["failed_assertions"]
 
 
+def test_b3_committed_handoff_counts_as_durable_evidence(tmp_path: Path) -> None:
+    core = tmp_path / "core"
+    shutil.copytree(CORE, core, ignore=shutil.ignore_patterns("build", "results", "__pycache__"))
+    mock = core / "mock_agent.py"
+    text = mock.read_text().replace(
+        "        reference(scenario, stage)\n",
+        "        reference(scenario, stage)\n"
+        "        if scenario == 'b3' and stage == 'stage1':\n"
+        "            import subprocess\n"
+        "            subprocess.run(['git', 'add', '-A'], check=True)\n"
+        "            subprocess.run(['git', '-c', 'user.name=bench', '-c', 'user.email=b@x',\n"
+        "                            '-c', 'commit.gpgSign=false', '-c', 'core.hooksPath=/dev/null',\n"
+        "                            'commit', '-qm', 'Durable handoff'], check=True)\n",
+    )
+    mock.write_text(text)
+    result = harness(["--scenarios", "b3", "--conditions", "baseline", "--runs", "1", "--out", "results"],
+                     tmp_path, core / "run.sh")
+    assert result.returncode == 0, result.stdout + result.stderr
+    stage = tmp_path / "results/b3/baseline/run-1/stage1"
+    handoff = json.loads((stage / "run-stage1.json").read_text())
+    assert handoff["pass"], handoff["failed_assertions"]
+    assert "docs/STATUS.md" in handoff["durable_paths"]
+    assert "STATUS.md" in (stage / "full.diff").read_text()
+    assert json.loads((stage.parent / "run.json").read_text())["pass"]
+
+
 def test_result_error_is_not_success_even_with_zero_cli_exit(tmp_path: Path) -> None:
     path = tmp_path / "transcript.jsonl"
     path.write_text(json.dumps({"type": "result", "subtype": "error_max_turns", "is_error": True}), encoding="utf-8")
     parsed = scorer.parse_transcript(path)
     assert not scorer.agent_completed({"rc": 0}, parsed)
+
+
+def test_transcripts_record_reported_models_across_fresh_sessions(tmp_path: Path) -> None:
+    path = tmp_path / "transcript.jsonl"
+    path.write_text('\n'.join(json.dumps(event) for event in [
+        {"type": "assistant", "message": {"model": "model-a", "content": []}},
+        {"type": "result", "subtype": "success", "modelUsage": {"model-a": {}, "model-b": {}}},
+    ]))
+    first = scorer.parse_transcript(path)
+    assert first["models"] == ["model-a", "model-b"]
+    path.write_text(json.dumps({"type": "assistant", "message": {"model": "model-c", "content": []}}))
+    second = scorer.parse_transcript(path)
+    assert scorer.merge_transcripts(first, second)["models"] == ["model-a", "model-b", "model-c"]
+    assert scorer.parse_transcript(None)["models"] == []
 
 
 def test_container_deadline_removes_container(tmp_path: Path) -> None:

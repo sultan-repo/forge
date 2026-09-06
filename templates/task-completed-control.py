@@ -89,11 +89,11 @@ def approval_matches_project(cwd: Path, state: JsonObject, execution: JsonObject
             ["git", "diff", "--cached", "--no-renames", "--name-only", "-z", reviewed, "--"],
             ["git", "ls-files", "--others", "--exclude-standard", "-z"],
         ):
-            completed = subprocess.run(command, cwd=cwd, capture_output=True, text=True, check=False)
+            completed = subprocess.run(command, cwd=cwd, capture_output=True, check=False)
             if completed.returncode != 0:
                 return False
-            paths = completed.stdout.split("\0")
-            if any(path and path != ".claude/project-control.json" and not path.startswith(".claude/forge/runtime/") for path in paths):
+            paths = completed.stdout.split(b"\0")
+            if any(path and path != b".claude/project-control.json" and not path.startswith(b".claude/forge/runtime/") for path in paths):
                 return False
     except OSError:
         return False

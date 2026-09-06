@@ -13,7 +13,7 @@ Forge is a methodology skill with optional runtime helpers. Improve observed beh
 
 ## Local validation
 
-Use Python 3.12 or newer; CI runs Python 3.12. Runtime scripts use the standard library. Install the pinned development tools in an isolated virtual environment:
+Use Python 3.12 or newer; CI runs Python 3.12. Runtime scripts use the standard library. The installed package retains contributor files for inspection and self-validation; installation does not install the dependencies in `requirements-dev.txt`. For development, install those pinned tools in an isolated virtual environment:
 
 ```bash
 python3 -m venv .venv
@@ -26,6 +26,8 @@ Start with the package check:
 ```bash
 python3 scripts/validate-skill-package.py
 ```
+
+The [control-state schema](templates/project-control.schema.json) and [execution-profile schema](templates/execution-profile.schema.json) document data shapes for tooling. Tests validate the schemas and their examples; the standard-library runtime validators also check project references, revision rules, and supported execution settings.
 
 Run the deterministic suite for code changes. Runner tests use fake adapters and local subprocess checks and do not require Claude/Codex credentials:
 

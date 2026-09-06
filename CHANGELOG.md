@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- makes independent Codex review request high reasoning effort per run without pinning a transient model name; unsupported effort fails closed instead of silently weakening review
+- makes skill invocation, bootstrap updates, help mode, and lifecycle-hook limits explicit; links all reference modules from the relevant guidance
+- validates skill identity and invocation settings inside actual frontmatter before replacing an installation
+- keeps status available during execution, revalidates saved correction reviews, and checks reduced cycle limits before dispatching more work
+- stops remaining agent processes before checkpointing and protects runtime writes from escaping through symbolic links or predictable temporary files
+- rejects malformed Plan Delta identities and nonpositive revisions, removes repeated shape checks, and corrects the example's requirement-to-packet mapping
+- scores committed B3 handoffs against the original fixture and records reported model IDs separately from the requested model setting
+- clarifies release publication checks and their non-atomic boundary
+- preserves non-UTF-8 file content and exact Git path bytes through runner checkpoints and completion checks
+- retains deferred findings with cycle provenance, keeps doctor from modifying Git exclusions, and reports platform/interrupt failures clearly
+- makes independent review an explicit choice in the starter control example and distinguishes skill commands from shell runner commands
+- validates all distributed schemas and their examples in tests, exercises installation rollback with system-style command paths, and removes an unused scorer constant
+
 ## 1.9.0
 
 Execution, benchmark, installation, release, and live-provider hardening release.

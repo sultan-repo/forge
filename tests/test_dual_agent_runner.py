@@ -252,6 +252,79 @@ def test_launcher_is_executable() -> None:
     assert os.access(ROOT / "scripts" / "forge", os.X_OK)
 
 
+@pytest.mark.skipif(os.name != "posix", reason="non-UTF-8 filenames require POSIX")
+@pytest.mark.parametrize(
+    ("filename", "initial", "updated"),
+    [
+        (b"latin1.txt", b"ol\xe9\n", b"caf\xe9\n"),
+        pytest.param(b"legacy-\xff.txt", b"before\n", b"after\n", marks=pytest.mark.skipif(
+            sys.platform != "linux", reason="macOS filesystems require UTF-8 filenames"
+        )),
+    ],
+)
+def test_non_utf8_tracked_content_and_paths_reach_review(
+    tmp_path: Path, monkeypatch, filename: bytes, initial: bytes, updated: bytes
+) -> None:
+    repo, control = init_repo(tmp_path)
+    relative = os.fsdecode(filename)
+    (repo / relative).write_bytes(initial)
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "legacy file"], cwd=repo, check=True)
+    install_fakes(monkeypatch, Implementer(lambda cwd, *_: (cwd / relative).write_bytes(updated)), Reviewer())
+    assert runner.run_packet(repo, control, "WP-1.1", profile(), False) == 0
+    handoff = runner.read_json(runner.handoff_path(repo, "WP-1.1", 1))
+    assert [os.fsencode(path) for path in handoff["files_changed"]] == [filename]
+    assert (repo / relative).read_bytes() == updated
+    assert execution(repo, control)["phase"] == "approved"
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="macOS filesystems require UTF-8 filenames")
+def test_untracked_non_utf8_path_fingerprint_reads_exact_file(tmp_path: Path) -> None:
+    repo, _ = init_repo(tmp_path)
+    filename = b"untracked-\xff.txt"
+    path = repo / os.fsdecode(filename)
+    path.write_bytes(b"first")
+    assert [os.fsencode(item) for item in runner.worktree_changes(repo)] == [filename]
+    before = runner.worktree_fingerprint(repo)
+    path.write_bytes(b"second")
+    assert runner.worktree_fingerprint(repo) != before
+
+
+@pytest.mark.parametrize("operation", ["status", "diff"])
+@pytest.mark.parametrize("filename", [b"index-only-\xff.txt", b"index-only-\rfile.txt"])
+def test_non_utf8_index_paths_preserve_exact_bytes(tmp_path: Path, operation: str, filename: bytes) -> None:
+    repo, _ = init_repo(tmp_path)
+    blob = git(repo, "rev-parse", "HEAD:app.txt")
+    subprocess.run(["git", "update-index", "--add", "--cacheinfo", "100644", blob, os.fsdecode(filename)],
+                   cwd=repo, check=True)
+    if operation == "status":
+        paths = runner.worktree_changes(repo)
+    else:
+        tree = git(repo, "write-tree")
+        commit = git(repo, "commit-tree", tree, "-p", "HEAD", "-m", "index-only file")
+        paths = runner.changed_files(repo, "HEAD", commit)
+    assert [os.fsencode(item) for item in paths] == [filename]
+
+
+def test_execution_lock_reports_unavailable_platform(tmp_path: Path, monkeypatch) -> None:
+    repo, _ = init_repo(tmp_path)
+    monkeypatch.setitem(sys.modules, "fcntl", None)
+    with pytest.raises(runner.ForgeRunnerError, match="macOS or Linux"), runner.execution_lock(repo):
+        pytest.fail("lock must fail when fcntl is unavailable")
+
+
+@pytest.mark.parametrize("command", ["doctor", "status"])
+def test_readiness_and_status_do_not_change_git_excludes(tmp_path: Path, monkeypatch, command: str) -> None:
+    repo, _ = init_repo(tmp_path)
+    exclude = runner.git_path(repo, "info/exclude")
+    exclude.write_text("# preserve local excludes\n", encoding="utf-8")
+    monkeypatch.chdir(repo)
+    install_fakes(monkeypatch, Implementer(), Reviewer())
+    assert runner.main([command]) == 0
+    assert exclude.read_text(encoding="utf-8") == "# preserve local excludes\n"
+    assert not (repo / runner.RUNTIME_DIR).exists()
+
+
 def test_linked_worktree_runtime_exclusion(tmp_path: Path) -> None:
     repo, _ = init_repo(tmp_path)
     worktree = tmp_path / "linked"
@@ -325,6 +398,89 @@ def test_reviewer_failure_resumes_without_reimplementation(tmp_path: Path, monke
     install_fakes(monkeypatch, second_impl, Reviewer())
     assert runner.run_packet(repo, control, "WP-1.1", profile(), False) == 0
     assert second_impl.calls == 0
+
+
+def test_status_can_read_an_active_runner_without_taking_its_lock(tmp_path: Path, monkeypatch) -> None:
+    repo, control = init_repo(tmp_path)
+    saved = execution(repo, control)
+    saved.update(phase="implementing", implementation_attempt=1)
+    runner.save_execution_state(repo, "WP-1.1", saved)
+    before = runner.runtime_state_path(repo, "WP-1.1").read_bytes()
+    monkeypatch.chdir(repo)
+    with runner.execution_lock(repo):
+        assert runner.main(["status", "WP-1.1"]) == 0
+    assert runner.runtime_state_path(repo, "WP-1.1").read_bytes() == before
+
+
+@pytest.mark.parametrize("field", ["packet_id", "reviewed_commit", "cycle"])
+def test_resume_revalidates_saved_correction_identity(tmp_path: Path, monkeypatch, field: str) -> None:
+    repo, control = init_repo(tmp_path)
+
+    def interrupted(cwd: Path, prompt: str, call: int) -> None:
+        if call == 2:
+            raise runner.AdapterError("interrupted correction")
+        (cwd / "app.txt").write_text("needs correction\n", encoding="utf-8")
+
+    install_fakes(monkeypatch, Implementer(interrupted), Reviewer(["CHANGES_REQUIRED"]))
+    with pytest.raises(runner.AdapterError):
+        runner.run_packet(repo, control, "WP-1.1", profile(), False)
+    record = runner.review_result_path(repo, "WP-1.1", 1)
+    stale = json.loads(record.read_text(encoding="utf-8"))
+    stale[field] = {"packet_id": "WP-OTHER", "reviewed_commit": "f" * 40, "cycle": 9}[field]
+    record.write_text(json.dumps(stale), encoding="utf-8")
+    implementer = Implementer(lambda *_: pytest.fail("unvalidated review entered implementation"))
+    install_fakes(monkeypatch, implementer, Reviewer())
+    with pytest.raises(runner.ForgeRunnerError, match="stale or mismatched"):
+        runner.run_packet(repo, control, "WP-1.1", profile(), False)
+    assert implementer.calls == 0
+
+
+def test_lowered_cycle_limit_stops_before_another_implementation(tmp_path: Path, monkeypatch) -> None:
+    repo, control = init_repo(tmp_path)
+
+    def interrupted(cwd: Path, prompt: str, call: int) -> None:
+        if call == 2:
+            raise runner.AdapterError("correction interrupted")
+        (cwd / "app.txt").write_text("needs correction\n", encoding="utf-8")
+
+    install_fakes(monkeypatch, Implementer(interrupted), Reviewer(["CHANGES_REQUIRED"]))
+    with pytest.raises(runner.AdapterError):
+        runner.run_packet(repo, control, "WP-1.1", profile(max_cycles=3), False)
+    implementer = Implementer(lambda *_: pytest.fail("correction exceeded the new cycle limit"))
+    install_fakes(monkeypatch, implementer, Reviewer())
+    assert runner.run_packet(repo, control, "WP-1.1", profile(max_cycles=1), False) == 2
+    assert implementer.calls == 0
+    assert execution(repo, control)["review_status"] == "cycle_limit"
+
+
+@pytest.mark.parametrize("component", ["runtime", "executions"])
+def test_runtime_records_cannot_escape_repository_via_symlink(tmp_path: Path, component: str) -> None:
+    repo, control = init_repo(tmp_path)
+    external = tmp_path / "external"
+    external.mkdir()
+    link = repo / runner.RUNTIME_DIR
+    if component == "executions":
+        link /= "executions"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(external, target_is_directory=True)
+    saved = runner.new_execution_state(repo, runner.load_valid_control(repo, control), "WP-1.1")
+    with pytest.raises(runner.ForgeRunnerError, match="runtime"):
+        runner.save_execution_state(repo, "WP-1.1", saved)
+    assert list(external.iterdir()) == []
+
+
+def test_atomic_state_write_does_not_follow_a_predictable_temporary_symlink(tmp_path: Path) -> None:
+    repo, control = init_repo(tmp_path)
+    external = tmp_path / "external.json"
+    external.write_text("preserve this file", encoding="utf-8")
+    record = runner.runtime_state_path(repo, "WP-1.1")
+    record.parent.mkdir(parents=True)
+    record.with_suffix(".json.tmp").symlink_to(external)
+    saved = runner.new_execution_state(repo, runner.load_valid_control(repo, control), "WP-1.1")
+    runner.save_execution_state(repo, "WP-1.1", saved)
+    assert external.read_text(encoding="utf-8") == "preserve this file"
+    assert not record.is_symlink()
+    assert json.loads(record.read_text(encoding="utf-8")) == saved
 
 
 def test_final_allowed_review_can_resume(tmp_path: Path, monkeypatch) -> None:
@@ -403,6 +559,32 @@ def test_high_adjacent_finding_is_surfaced(tmp_path: Path, monkeypatch, capsys) 
     install_fakes(monkeypatch, Implementer(), AdjacentReviewer())
     assert runner.run_packet(repo, control, "WP-1.1", profile(), False) == 0
     assert "serious issue(s) outside the current scope" in capsys.readouterr().out
+
+
+def test_deferred_findings_keep_cycle_provenance_and_retry_without_duplicates(tmp_path: Path) -> None:
+    repo, _ = init_repo(tmp_path)
+    first = finding("adjacent", "Low")
+    second = finding("unrelated", "Critical")
+    first["id"] = second["id"] = "F-1"
+    assert runner.persist_deferred_findings(repo, "WP-1.1", {"cycle": 1, "findings": [first]}) == 0
+    later = {"cycle": 2, "findings": [second]}
+    assert runner.persist_deferred_findings(repo, "WP-1.1", later) == 1
+    assert runner.persist_deferred_findings(repo, "WP-1.1", later) == 1
+    records = runner.read_json(runner.deferred_findings_path(repo, "WP-1.1"))["findings"]
+    assert [(item["cycle"], item["id"], item["severity"]) for item in records] == [
+        (1, "F-1", "Low"), (2, "F-1", "Critical")
+    ]
+    assert "cycle" not in first and "cycle" not in second
+
+
+def test_deferred_findings_preserve_legacy_records_without_cycle(tmp_path: Path) -> None:
+    repo, _ = init_repo(tmp_path)
+    legacy = finding("adjacent", "Low")
+    latest = {**legacy, "title": "new issue", "severity": "Critical"}
+    path = runner.deferred_findings_path(repo, "WP-1.1")
+    runner.atomic_json(path, {"version": 1, "packet_id": "WP-1.1", "findings": [legacy]})
+    assert runner.persist_deferred_findings(repo, "WP-1.1", {"cycle": 2, "findings": [latest]}) == 1
+    assert runner.read_json(path)["findings"] == [legacy, {**latest, "cycle": 2}]
 
 
 def test_failed_plan_gate_blocks_dispatch(tmp_path: Path, monkeypatch) -> None:
@@ -840,6 +1022,31 @@ def test_codex_failure_exposes_actual_error_after_startup_logs(
 
 
 @pytest.mark.skipif(os.name != "posix", reason="runner process-group isolation requires POSIX")
+def test_successful_agent_cannot_leave_background_children_editing(tmp_path: Path) -> None:
+    from adapters.base import run_command
+
+    marker = tmp_path / "late-edit"
+    group_file = tmp_path / "agent-group"
+    child = f"import time; from pathlib import Path; time.sleep(0.5); Path({str(marker)!r}).write_text('late edit')"
+    agent = (
+        f"import os, subprocess, sys; from pathlib import Path; Path({str(group_file)!r}).write_text(str(os.getpgrp())); "
+        f"subprocess.Popen([sys.executable, '-c', {child!r}], stdin=subprocess.DEVNULL, "
+        "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)"
+    )
+    try:
+        result = run_command([sys.executable, "-c", agent], cwd=tmp_path, timeout_s=5)
+        assert result.returncode == 0
+        time.sleep(0.8)
+        assert not marker.exists()
+    finally:
+        if group_file.exists():
+            try:
+                os.killpg(int(group_file.read_text(encoding="utf-8")), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+@pytest.mark.skipif(os.name != "posix", reason="runner process-group isolation requires POSIX")
 def test_timed_out_agent_cannot_leave_a_child_editing(tmp_path: Path) -> None:
     from adapters.base import AdapterError, run_command
 
@@ -853,26 +1060,29 @@ def test_timed_out_agent_cannot_leave_a_child_editing(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(os.name != "posix", reason="runner process-group isolation requires POSIX")
-def test_sigterm_during_agent_startup_still_stops_child(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize("signal_number", [signal.SIGTERM, signal.SIGINT])
+def test_interruption_during_agent_startup_still_stops_child(tmp_path: Path, monkeypatch, signal_number: int) -> None:
     from adapters import base
 
     original_popen = base.subprocess.Popen
-    original_handler = signal.getsignal(signal.SIGTERM)
+    original_handler = signal.getsignal(signal_number)
     children = []
 
     def interrupt_startup(*args, **kwargs):
         child = original_popen(*args, **kwargs)
         children.append(child)
-        os.kill(os.getpid(), signal.SIGTERM)
+        os.kill(os.getpid(), signal_number)
         return child
 
     monkeypatch.setattr(base.subprocess, "Popen", interrupt_startup)
     try:
-        with pytest.raises(SystemExit) as error:
+        expected_exception = SystemExit if signal_number == signal.SIGTERM else KeyboardInterrupt
+        with pytest.raises(expected_exception) as error:
             base.run_command([sys.executable, "-c", "import time; time.sleep(20)"], cwd=tmp_path)
-        assert error.value.code == 128 + signal.SIGTERM
+        if signal_number == signal.SIGTERM:
+            assert error.value.code == 128 + signal.SIGTERM
         assert children[0].poll() is not None
-        assert signal.getsignal(signal.SIGTERM) == original_handler
+        assert signal.getsignal(signal_number) == original_handler
     finally:
         for child in children:
             if child.poll() is None:
@@ -881,7 +1091,10 @@ def test_sigterm_during_agent_startup_still_stops_child(tmp_path: Path, monkeypa
 
 
 @pytest.mark.skipif(os.name != "posix", reason="runner process-group isolation requires POSIX")
-def test_sigterm_stops_agent_children_before_releasing_runner_lock(tmp_path: Path) -> None:
+@pytest.mark.parametrize("signal_number", [signal.SIGTERM, signal.SIGINT])
+def test_interruption_stops_agent_children_without_traceback_and_releases_lock(
+    tmp_path: Path, signal_number: int
+) -> None:
     repo, control = init_repo(tmp_path)
     ready = tmp_path / "agent-ready"
     child = (
@@ -910,9 +1123,12 @@ raise SystemExit(contracts.runner.main(['run', 'WP-1.1']))
             time.sleep(0.02)
         assert ready.exists(), "local agent did not become ready"
         group = os.getpgid(int(ready.read_text(encoding="utf-8")))
-        process.terminate()
+        process.send_signal(signal_number)
         stdout, stderr = process.communicate(timeout=5)
-        assert process.returncode == 128 + signal.SIGTERM, stdout + stderr
+        assert process.returncode == 128 + signal_number, stdout + stderr
+        assert "Traceback" not in stderr
+        if signal_number == signal.SIGINT:
+            assert "interrupted" in stderr.lower()
         with runner.execution_lock(repo):
             time.sleep(1.6)
             assert (repo / "app.txt").read_text(encoding="utf-8") == "base\n"

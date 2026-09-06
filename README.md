@@ -9,7 +9,7 @@ Forge is a Claude Code skill that helps turn a rough idea into a structured proj
 
 You do not need to learn Forge's internal workflow before using it.
 
-## Start in 10 seconds
+## Start with your project idea
 
 From your project folder, open Claude Code and say:
 
@@ -19,9 +19,7 @@ Use Forge from https://github.com/sultan-repo/forge to build:
 [your project idea]
 ```
 
-That's it.
-
-For normal use, Forge resolves the latest published stable release and decides how much structure the project actually needs. Small tasks should stay small; larger projects can use stronger project-control features automatically.
+Claude Code follows Forge's [bootstrap instructions](BOOTSTRAP.md) to select and load the latest published stable release, then chooses how much structure the project needs. First-time loading requires repository access. Small tasks should stay small; larger projects can use stronger project-control features.
 
 ## What Forge does
 
@@ -84,6 +82,8 @@ After Forge is installed, you can use natural language or the skill commands bel
 /forge help
 ```
 
+These commands run inside Claude Code. `/forge status` summarizes the project; the optional shell runner's `status` checks one packet's execution and review state. The shell runner has `doctor`, `run`, and `status` commands, with `--help` for usage. See the [runner guide](docs/runner.md).
+
 Natural language works too:
 
 ```text
@@ -94,7 +94,7 @@ Use Forge to build ...
 Use Forge to adopt this existing repository and add ...
 ```
 
-Forge only auto-invokes when you explicitly ask to use Forge.
+Forge's skill description tells Claude to load it only when you explicitly request its use. Natural-language loading relies on Claude following that instruction; it is not an enforced invocation boundary. Use `/forge` for direct invocation. See [Claude Code's skill invocation controls](https://code.claude.com/docs/en/skills#control-who-invokes-a-skill).
 
 ## Install Forge permanently
 
@@ -119,7 +119,7 @@ See [BOOTSTRAP.md](BOOTSTRAP.md) for the security and provenance details.
 
 ## Updating Forge
 
-- **Using Forge from the repository URL:** Forge resolves the latest stable release at invocation time unless you explicitly request a version or commit.
+- **Loading Forge from the repository URL:** the bootstrap instructions select the latest stable release unless you explicitly request a version or commit. The loaded instructions remain in use for the current session; subsequent `/forge` commands do not themselves fetch updates.
 - **Already installed locally:** Claude Code uses the installed copy until you deliberately update it.
 - **Need exact reproducibility:** specify an immutable release or commit.
 
@@ -138,6 +138,8 @@ Forge        -> reconciliation and continuation
 This is **optional**. You do not need Codex, Docker, or the local runner for normal Forge usage.
 
 The runner is intended for projects already using Forge's durable project-control mode. It uses your locally authenticated Claude Code and Codex CLIs, creates Git checkpoints, and keeps review tied to the exact implementation checkpoint.
+
+For reviewer quality, Forge does not pin a Codex model name. It uses the model selected by the current Codex CLI/provider and explicitly requests **high reasoning effort** for each independent review. If the active Codex setup cannot honor that request, the review fails instead of silently dropping to a lower effort.
 
 A real disposable-project smoke test has successfully exercised the Claude Code -> Codex review path. That proves one observed integration path, not a universal provider/version compatibility guarantee.
 

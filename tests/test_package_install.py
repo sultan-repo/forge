@@ -1,12 +1,15 @@
 """Real staged installation and distribution validation; no user installation touched."""
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
+import jsonschema
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,11 +26,21 @@ def package(tmp_path):
 
 def install(source, destination, *, extra_env=None, entrypoint="install.sh"):
     env = dict(os.environ, CLAUDE_SKILLS_DIR=str(destination), PYTHONPYCACHEPREFIX=str(destination.parent / "cache"))
+    # Default to the test interpreter; explicit command proxies take precedence.
+    env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env["PATH"]
     if extra_env:
         env.update(extra_env)
-    # Exercise the same interpreter used to validate in CI, even outside an activated venv.
-    env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env["PATH"]
     return subprocess.run(["bash", str(source / "scripts" / entrypoint)], env=env, text=True, capture_output=True, check=False)
+
+
+@pytest.mark.parametrize("name", ["project-control", "execution-profile", "implementation-handoff", "review-result"])
+def test_distributed_schemas_and_examples_remain_valid(name):
+    schema = json.loads((ROOT / "templates" / f"{name}.schema.json").read_text())
+    schema_validator = jsonschema.validators.validator_for(schema)
+    schema_validator.check_schema(schema)
+    example = ROOT / "templates" / f"{name}.example.json"
+    if example.exists():
+        schema_validator(schema).validate(json.loads(example.read_text()))
 
 
 def test_installed_package_validates_and_preserves_previous_install(package, tmp_path):
@@ -68,6 +81,69 @@ def test_invalid_candidate_keeps_active_install_intact(package, tmp_path):
     assert not list(skills.glob(".forge-install.*"))
 
 
+@pytest.mark.parametrize("failure", ["wrong_name", "unclosed", "disabled_body_decoy", "duplicate_name", "empty_description"])
+def test_invalid_skill_frontmatter_keeps_active_install_intact(package, tmp_path, failure):
+    skill = package / "SKILL.md"
+    contents = skill.read_text()
+    if failure == "wrong_name":
+        contents = contents.replace("name: forge\n", "name: another-skill\n", 1)
+    elif failure == "unclosed":
+        contents = contents.replace("\n---\n", "\n", 1)
+    elif failure == "disabled_body_decoy":
+        contents = contents.replace("disable-model-invocation: false", "disable-model-invocation: true", 1)
+        contents += "\n<!-- disable-model-invocation: false -->\n"
+    elif failure == "duplicate_name":
+        contents = contents.replace("name: forge\n", "name: forge\nname: another-skill\n", 1)
+    else:
+        contents = "\n".join("description:" if line.startswith("description:") else line for line in contents.split("\n"))
+    skill.write_text(contents)
+    skills = tmp_path / "skills"
+    previous = skills / "forge"
+    previous.mkdir(parents=True)
+    (previous / "previous.txt").write_text("keep the valid installation")
+
+    result = install(package, skills)
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "SKILL INVALID" in result.stderr
+    assert "SKILL.md" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert (previous / "previous.txt").read_text() == "keep the valid installation"
+    assert not list(skills.glob("forge.backup.*"))
+    assert not list(skills.glob(".forge-install.*"))
+
+
+@pytest.mark.parametrize("disabled", ["false", "NO", "off", "0"])
+def test_supported_frontmatter_scalars_and_folded_description(package, disabled):
+    skill = package / "SKILL.md"
+    body = skill.read_text().split("\n---\n", 1)[1]
+    skill.write_text(
+        "---\nname: 'forge' # skill identity\n"
+        "description: >-\n"
+        "  Invoke only when the user explicitly mentions Forge\n"
+        "  to request its use.\n"
+        f"disable-model-invocation: {disabled} # supports natural-language requests\n"
+        "---\n" + body
+    )
+    result = subprocess.run([sys.executable, str(package / "scripts/validate-skill-package.py")], text=True, capture_output=True, check=False)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("description", [
+    '"Forge # invoke only when explicitly requested" # comment',
+    "|-\n  Forge # invoke only when explicitly requested",
+])
+def test_frontmatter_description_preserves_literal_hashes(package, description):
+    skill = package / "SKILL.md"
+    body = skill.read_text().split("\n---\n", 1)[1]
+    skill.write_text(
+        f'---\nname: "forge"\ndescription: {description}\n'
+        "disable-model-invocation: false\n---\n" + body
+    )
+    result = subprocess.run([sys.executable, str(package / "scripts/validate-skill-package.py")], text=True, capture_output=True, check=False)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_install_lock_does_not_remove_another_installer_lock(package, tmp_path):
     skills = tmp_path / "skills"
     skills.mkdir()
@@ -96,7 +172,15 @@ def test_validator_ignores_local_benchmark_results(package):
     assert result.returncode == 0, result.stderr
 
 
-def test_failed_final_move_restores_previous_install_under_lock(package, tmp_path):
+@pytest.mark.parametrize("shared_interpreter_bin", [False, True])
+def test_failed_final_move_restores_previous_install_under_lock(package, tmp_path, monkeypatch, shared_interpreter_bin):
+    if shared_interpreter_bin:
+        # System interpreters can share a bin directory with mv; venvs usually do not.
+        interpreter_bin = tmp_path / "system-bin"
+        interpreter_bin.mkdir()
+        (interpreter_bin / "python3").symlink_to(sys.executable)
+        (interpreter_bin / "mv").symlink_to(shutil.which("mv"))
+        monkeypatch.setattr(sys.modules[__name__], "sys", SimpleNamespace(executable=str(interpreter_bin / "python3")))
     skills = tmp_path / "skills"
     previous = skills / "forge"
     previous.mkdir(parents=True)

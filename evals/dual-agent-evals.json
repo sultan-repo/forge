@@ -36,6 +36,7 @@
       "scenario": "Review and correction repeat until the configured cycle limit.",
       "expectations": [
         "Automatic cycles stop at the configured maximum",
+        "A lowered cycle limit is checked before dispatching another implementation on retry",
         "Packet execution phase becomes escalated",
         "User receives a short plain-language decision request rather than internal transcripts"
       ]
@@ -46,7 +47,18 @@
       "expectations": [
         "Durable packet execution state records the last safe phase and checkpoint",
         "Resume inspects current Git/control state before repeating work",
-        "Completed implementation is not unnecessarily rebuilt"
+        "Completed implementation is not unnecessarily rebuilt",
+        "Saved correction reviews are revalidated against the packet, revisions, checkpoints, cycle, and finding contract",
+        "CLI process-group children are stopped on success, timeout, Ctrl+C, and SIGTERM before checkpointing or releasing the runner lock"
+      ]
+    },
+    {
+      "id": "DA-6",
+      "scenario": "Runtime paths contain symbolic links and status is requested during an active run.",
+      "expectations": [
+        "Runtime records cannot resolve outside the project's runtime directory",
+        "Atomic writes do not overwrite a predictable temporary symlink target",
+        "Status can read the saved execution snapshot without competing for the active runner's write lock"
       ]
     },
     {

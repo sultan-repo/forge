@@ -16,7 +16,6 @@ from pathlib import Path
 
 from fixture_bundle import load_bundle
 
-HERE = Path(__file__).resolve().parent
 BUNDLE = load_bundle()
 
 REQS_BY_MILESTONE = {
@@ -146,10 +145,11 @@ def milestone_mentioned(text: str, ms: str) -> bool:
 
 def parse_transcript(path: Path | None) -> dict:
     out = {"assistant_text": "", "num_turns": None, "usage": None, "cost_usd": None, "duration_ms": None,
-           "questions_to_user": 0, "result_success": False}
+           "questions_to_user": 0, "result_success": False, "models": []}
     if not path or not path.exists():
         return out
     texts = []
+    models: set[str] = set()
     for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
         try:
             ev = json.loads(line)
@@ -158,10 +158,18 @@ def parse_transcript(path: Path | None) -> dict:
         if not isinstance(ev, dict):
             continue
         if ev.get("type") == "assistant":
-            for block in (ev.get("message") or {}).get("content", []) or []:
+            message = ev.get("message")
+            if not isinstance(message, dict):
+                continue
+            if isinstance(message.get("model"), str) and message["model"].strip():
+                models.add(message["model"])
+            for block in message.get("content", []) or []:
                 if isinstance(block, dict) and block.get("type") == "text":
                     texts.append(block.get("text", ""))
         elif ev.get("type") == "result":
+            model_usage = ev.get("modelUsage")
+            if isinstance(model_usage, dict):
+                models.update(model for model in model_usage if isinstance(model, str) and model.strip())
             out["result_success"] = ev.get("subtype") == "success" and not ev.get("is_error", False)
             out["num_turns"] = ev.get("num_turns")
             out["usage"] = ev.get("usage")
@@ -170,6 +178,7 @@ def parse_transcript(path: Path | None) -> dict:
             if isinstance(ev.get("result"), str):
                 texts.append(ev["result"])
     out["assistant_text"] = "\n".join(texts)
+    out["models"] = sorted(models)
     out["questions_to_user"] = sum(1 for line in out["assistant_text"].splitlines() if line.strip().endswith("?"))
     return out
 
@@ -202,6 +211,7 @@ def merge_transcripts(*items: dict) -> dict:
         "duration_ms": summed("duration_ms"),
         "questions_to_user": sum(int(item.get("questions_to_user") or 0) for item in present),
         "result_success": bool(present) and all(item.get("result_success") for item in present),
+        "models": sorted({model for item in present for model in item.get("models", [])}),
     }
 
 
@@ -252,6 +262,7 @@ def score_b3_stage1(repo: Path, meta: dict, transcript: dict) -> dict:
         "failed_assertions": [key for key, value in assertions.items() if not value], "assertions": assertions,
         "requirements": reqs, "durable_paths": durable_paths, "notes": notes,
         "tokens_total": total_tokens(transcript.get("usage")), "wall_seconds": meta.get("wall_seconds"),
+        "models": transcript.get("models", []),
     }
 
 
@@ -357,6 +368,7 @@ def score(scenario: str, repo: Path, meta: dict, transcript: dict) -> dict:
         "later_work_resumed": later_resumed, "later_work_traceable": later_traceable,
         "bureaucracy": bureaucracy,
         "tokens_total": total_tokens(transcript["usage"]), "usage": transcript["usage"], "cost_usd": transcript["cost_usd"],
+        "models": transcript.get("models", []),
         "wall_seconds": meta.get("wall_seconds"), "agent_duration_ms": transcript["duration_ms"],
         "visible_tests": visible, "changes": {key: changes[key] for key in ("modified", "added", "deleted")},
         "notes": notes, "evidence": meta.get("evidence", {}),

@@ -63,9 +63,11 @@ def main(out_dir: str):
         f"Forge under test: `{manifest.get('forge_ref')}` (`{manifest.get('forge_commit', '')[:12]}`) · "
         f"verified: `{manifest.get('forge_verified')}` · provenance: `{manifest.get('forge_provenance')}` · "
         f"isolation: `{manifest.get('isolation')}` · agent: `{manifest.get('agent')}` · "
-        f"model: `{manifest.get('model')}` · runs/cell: {manifest.get('runs_per_cell')} · seed: `{manifest.get('seed')}` · "
+        f"requested model: `{manifest.get('model')}` · runs/cell: {manifest.get('runs_per_cell')} · seed: `{manifest.get('seed')}` · "
         f"Forge invocation: `{manifest.get('forge_invocation')}`\n"
     )
+    models = sorted({model for run in runs for model in run.get("models", [])})
+    lines.append("Reported model IDs: " + (", ".join(f"`{model}`" for model in models) or "not reported") + ". See each run.json for its models.\n")
     lines.append(
         "Pass = every gating assertion true. Tokens = input+output+cache tokens reported by the agent. "
         "Times are wall-clock seconds for the agent session(s); B3 sums both fresh sessions. Variance columns: Wilson 95% CI on pass rate; "
