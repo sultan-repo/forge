@@ -31,7 +31,7 @@ Use the smallest complete panel and expand only when distinct expertise/evidence
 
 Reviewers inspect primary sources independently.
 
-Every Critical/High finding receives adversarial verification before acceptance.
+Verify Critical/High findings against primary evidence and credible counterexamples before accepting them. A separate reviewer is useful when it can add evidence or expose a mistaken assumption; it is not required merely to fill a panel.
 
 ## Challenge direction and plan integrity
 
@@ -53,19 +53,9 @@ Assess value, evidence, effort, migration risk, operational complexity, cost, sk
 
 Resolve contradictions, deduplicate findings, and separate root causes from symptoms.
 
-Start with:
-- Executive assessment
-- Ultimate-goal alignment
-- Plan/requirement conservation assessment
-- Evidence coverage/gaps
-- Recommended scope/requirements changes
+Lead with whether the implementation serves the objective, the most important verified findings, and the evidence gaps. Explain scope or direction changes only when they are material.
 
-Organize accepted actions into exactly:
-1. Revise
-2. Implement
-3. Re-engineer
-4. Fix
-5. UI/UX
+Group actions by the actual work or risk. Do not invent empty categories, a UI/UX section for a non-UI project, or a separate roadmap for a short set of related fixes.
 
 Priority:
 - P0 immediate blocker/unacceptable risk
@@ -73,9 +63,9 @@ Priority:
 - P2 material improvement
 - P3 optional optimization
 
-For each action include ID/title/category, priority/severity, evidence/confidence, objective impact, expected outcome, dependencies, relative effort, risks/reversibility, acceptance criteria, validation, documentation/control-state impact, and responsible workstream where useful.
+For each material action include the problem, evidence, consequence, expected correction, and how to verify it. Add dependencies, effort, ownership, rollback, or control-state changes only where they help a decision or implementation.
 
-Produce a phased roadmap.
+Use a phased roadmap when sequencing or independent milestones justify one.
 
 For material scope changes, provide:
 - Baseline roadmap within approved scope
@@ -83,9 +73,9 @@ For material scope changes, provide:
 
 Separate safe-to-begin, approval required, evidence required, and deferred opportunities.
 
-Do not automatically implement the broad roadmap.
+Implement corrections already authorized by the user. A review-only request does not authorize implementation, and recommendations that materially change approved scope still require normal decision authority. Do not ask again for authority already granted.
 
-## v1.3 mandatory lenses
+## Cross-cutting checks
 
 A full-spectrum review must also evaluate:
 - Plan Consistency: whether approved requirements have a coherent delivery/verification path

@@ -69,13 +69,15 @@ Publishable real runs must use the executable harness controls:
 
 - same fixture and task text across arms
 - fresh isolated agent sessions
-- container boundary that prevents access to hidden tests, scorer/reference code, other arms, and other run outputs
+- agent containers without mounts for hidden tests, scorer/reference code, other arms, or other run outputs, and a separate scoring container for executing project code
 - baseline arm with no Forge installed
 - Forge arm loaded from a verified immutable release asset
-- automatic Forge activation preflight
+- package discoverability/readability preflight without supplying the expected answer to the agent
 - fail-closed Forge package validation
 - paired/interleaved cells with deterministic randomized arm order
 - recorded runtime/model metadata, seed, release identity, asset digest, transcripts, diffs, timing, tokens, and scores
+
+These controls reduce specific leakage and host-execution risks. They do not prove methodology adherence or resistance to adversarial test-process manipulation; interpret results with the [harness limits](core/README.md#known-limits).
 
 ## Run matrix
 

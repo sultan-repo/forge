@@ -23,6 +23,8 @@
     "implementation_commit": {"type": "string", "minLength": 7},
     "cycle": {"type": "integer", "minimum": 1},
     "files_changed": {"type": "array", "items": {"type": "string"}},
+    "agent_report_structured": {"type": "boolean"},
+    "summary": {"type": "string"},
     "acceptance_results": {
       "type": "object",
       "additionalProperties": {"type": "string"}

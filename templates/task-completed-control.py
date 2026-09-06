@@ -43,10 +43,16 @@ def read_json_object(path: Path) -> JsonObject | None:
 
 def review_state(cwd: Path, packet_id: str, packet: JsonObject) -> JsonObject | None:
     """Resolve review state without making dual-agent runtime state canonical project truth."""
+    runtime_path = cwd / ".claude" / "forge" / "runtime" / "executions" / f"{packet_id}.json"
+    if runtime_path.exists():
+        # A malformed recovery record must not silently downgrade required review.
+        return read_json_object(runtime_path) or {"phase": "invalid"}
     execution = packet.get("execution")
     if isinstance(execution, dict):
         profile = execution.get("profile")
         phase = execution.get("phase")
+        if phase is not None and not isinstance(phase, str):
+            return {"phase": "invalid"}
         if execution.get("review_required") is True or profile == "dual-agent-local" or phase in {
             "ready_for_review",
             "reviewing",
@@ -57,11 +63,41 @@ def review_state(cwd: Path, packet_id: str, packet: JsonObject) -> JsonObject | 
         }:
             return execution
 
-    runtime_path = cwd / ".claude" / "forge" / "runtime" / "executions" / f"{packet_id}.json"
-    runtime = read_json_object(runtime_path)
-    if runtime is not None:
-        return runtime
     return None
+
+
+def approval_matches_project(cwd: Path, state: JsonObject, execution: JsonObject) -> bool:
+    """Allow reconciliation metadata changes, but never approve changed source."""
+    if execution.get("control_path", ".claude/project-control.json") != ".claude/project-control.json":
+        return False
+    reviewed = execution.get("reviewed_commit")
+    if not isinstance(reviewed, str) or not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", reviewed):
+        return False
+    for key in ("baseline_revision", "plan_revision"):
+        revision = execution.get(key)
+        if type(revision) is not int or revision < 1 or type(state.get(key)) is not int or revision != state[key]:
+            return False
+    try:
+        ancestor = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", reviewed, "HEAD"],
+            cwd=cwd, capture_output=True, check=False,
+        )
+        if ancestor.returncode != 0:
+            return False
+        for command in (
+            ["git", "diff", "--no-renames", "--name-only", "-z", reviewed, "--"],
+            ["git", "diff", "--cached", "--no-renames", "--name-only", "-z", reviewed, "--"],
+            ["git", "ls-files", "--others", "--exclude-standard", "-z"],
+        ):
+            completed = subprocess.run(command, cwd=cwd, capture_output=True, text=True, check=False)
+            if completed.returncode != 0:
+                return False
+            paths = completed.stdout.split("\0")
+            if any(path and path != ".claude/project-control.json" and not path.startswith(".claude/forge/runtime/") for path in paths):
+                return False
+    except OSError:
+        return False
+    return True
 
 
 def main() -> int:
@@ -106,14 +142,15 @@ def main() -> int:
 
     execution = review_state(cwd, packet_id, packet)
     if execution is not None:
+        if execution.get("packet_id", packet_id) != packet_id:
+            return fail(f"Forge: {packet_id} review belongs to another Work Packet.")
         if execution.get("phase") != "approved" or str(execution.get("review_status", "")) not in {
             "passed",
             "passed_with_deferred_findings",
         }:
             return fail(f"Forge: {packet_id} requires independent review before completion.")
-        reviewed_commit = execution.get("reviewed_commit") or execution.get("implementation_commit")
-        if not isinstance(reviewed_commit, str) or len(reviewed_commit) < 7:
-            return fail(f"Forge: {packet_id} has no valid reviewed commit recorded.")
+        if not approval_matches_project(cwd, state_value, execution):
+            return fail(f"Forge: {packet_id} review does not match the current source and plan; reconcile and review again.")
 
     if str(packet.get("acceptance_status", "")).lower() not in COMPLETED_STATUSES:
         return fail(f"Forge: {packet_id} acceptance_status is not complete.")

@@ -84,7 +84,7 @@ In this mode:
 
 The bundled runner uses Claude Code non-interactive print mode and the project's existing CLI authentication/environment. Forge does not read, copy, store, or commit Claude authentication material.
 
-This role assignment is a provided profile, not a permanent Forge assumption. Other adapters may reverse or replace roles in the future without changing the methodology.
+This role assignment is the only adapter pair currently implemented in the bundled runner. Other providers are a possible extension, not a supported profile option. The methodology itself remains role-based. See [runner setup and recovery](../docs/runner.md).
 
 ## Verification / review / goal capabilities
 

@@ -22,18 +22,12 @@ fi
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-if command -v python3 >/dev/null 2>&1; then
-  python3 "$SOURCE_DIR/scripts/validate-skill-package.py"
-else
-  echo "Forge: Python validator unavailable; continuing only because source provenance was pre-verified." >&2
-fi
-
 "$SOURCE_DIR/scripts/install.sh"
 
-cat <<'EOF'
+cat <<EOF
 FORGE_BOOTSTRAP_READY
 
-Load ~/.claude/skills/forge/SKILL.md directly for the current session.
+Load ${CLAUDE_SKILLS_DIR:-$HOME/.claude/skills}/forge/SKILL.md directly for the current session.
 Treat the user's explicit Forge request as invocation.
 Infer new for greenfield or adopt for existing work unless a mode was supplied.
 Do not require a restart merely to continue the current task.

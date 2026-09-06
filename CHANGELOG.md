@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+Repository validation and workflow hardening.
+
+- rejects stale source/plan approvals, malformed recovery state, and mismatched review evidence; preserves partial work and restores invalid control JSON after adapter failures
+- stops agent subprocess groups on timeout or interruption and honors profile verbosity settings
+- validates malformed project-control data without tracebacks and rejects cyclic work-packet references
+- stages and validates installations before replacing an existing copy, with rollback and concurrent-install protection
+- prevents hidden benchmark fixtures from entering agent configurations; isolates hidden tests from candidate pytest hooks and gates scoring on successful execution
+- adds portable benchmark deadlines, per-run fixture directories, source-derived scorer image tags, exact release commit provenance, and credential cleanup
+- requires full successful validation of the current main commit before release publication and handles prereleases separately
+- expands deterministic regression coverage, repository-wide Python linting, and pinned development dependencies
+- documents runner setup and recovery, corrects the walkthrough, and simplifies disproportionate methodology requirements
+
+Real-provider review quality and with-Forge versus no-Forge effectiveness remain unmeasured.
+
 ## 1.8.0
 
 Dual-agent execution, security hardening, and CI acceleration release.

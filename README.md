@@ -5,7 +5,7 @@
 [![Validate Forge](https://github.com/sultan-repo/forge/actions/workflows/validate.yml/badge.svg)](https://github.com/sultan-repo/forge/actions/workflows/validate.yml)
 [Latest release](https://github.com/sultan-repo/forge/releases/latest) · [MIT License](LICENSE)
 
-Forge is a Claude Code project-execution skill that turns rough ideas into validated requirements, keeps implementation aligned with the master plan, protects context across long sessions, coordinates available agent capabilities, and verifies the finished system against the original intent.
+Forge is a Claude Code skill for carrying a project from rough scope through requirements, planning, implementation, and verification. It gives the agent a method for preserving approved scope, recording durable context, and checking the finished system against the original intent. Optional Python helpers and a local agent runner enforce selected workflow checks.
 
 ```text
 Requirements -> Architecture -> Plan -> Build -> Verify
@@ -15,7 +15,7 @@ Requirements -> Architecture -> Plan -> Build -> Verify
 
 > **Evidence status**
 >
-> Forge includes an executable, isolated A/B benchmark for scope retention, debugging tunnel vision, context-loss recovery, and proportionality. The benchmark instrument is CI-self-tested, but **real with-Forge vs no-Forge performance results have not yet been published**. Forge does not claim effectiveness percentages without measured runs.
+> Forge includes an A/B benchmark harness for scope retention, debugging tunnel vision, context-loss recovery, and proportionality. Deterministic self-tests check the harness; **real with-Forge vs no-Forge performance results have not yet been published**. Agent behavior and real provider compatibility require separate evaluation.
 
 ## 10-second start
 
@@ -43,7 +43,7 @@ Long AI coding sessions often drift:
 - unrelated review findings hijack scope
 - tests pass while parts of the intended product were never built
 
-Forge adds a control layer so **local progress cannot silently replace the project objective**.
+Forge asks the agent to keep local progress tied to the project objective through explicit scope, revisions, and reconciliation. Its instructions are not a guarantee that an agent will follow them; tests, state checks, and review supply additional evidence.
 
 ## When to use Forge
 
@@ -58,9 +58,11 @@ Forge is most useful when:
 
 Forge intentionally stays lightweight for small reversible changes. If the task is simply “change this label and run the test,” Forge should behave accordingly.
 
-## Typical AI coding vs Forge
+## Intended behavior
 
-| Typical AI coding | With Forge |
+These are the behaviors Forge directs the agent to follow, not measured performance comparisons.
+
+| Common failure | Forge mechanism |
 |---|---|
 | Starts from rough scope | Challenges and enriches requirements |
 | Optimizes the current task | Preserves the ultimate objective |
@@ -72,9 +74,9 @@ Forge intentionally stays lightweight for small reversible changes. If the task 
 | Tests pass = “done” | Convergence checks the whole approved product |
 | Context loss blurs the roadmap | Durable state + resume orientation |
 
-## What Forge does
+## What is included
 
-| Phase | Capability |
+| Phase | Methodology or helper |
 |---|---|
 | Discovery | Objective clarification, requirements challenge/enrichment, assumptions, edge cases |
 | Specification | Invariants, acceptance scenarios, traceability |
@@ -87,7 +89,7 @@ Forge intentionally stays lightweight for small reversible changes. If the task 
 | Review | Spec compliance first, scope-aware finding triage |
 | Security | Trust boundary, least privilege, risky-change safeguards |
 | Completion | Requirement coverage and Convergence |
-| Methodology QA | Behavioral evals plus an executable isolated A/B benchmark harness |
+| Methodology QA | Behavioral eval definitions plus an executable A/B benchmark harness |
 
 ## Your first prompt is not the specification
 
@@ -194,7 +196,7 @@ Forge does not replace Claude Code's native capabilities. It supplies the projec
 | Agent collaboration | Decides when collaboration is worth the overhead |
 | Verification/review/goal tools | Drives them from requirements + acceptance + Convergence |
 
-Forge is deliberately **capability-first**. It does not hardcode model names, model generations, or temporary tool availability. It detects what the current environment can do and falls back gracefully.
+Forge’s methodology asks the agent to detect useful capabilities and fall back when they are unavailable. The optional local runner has a narrower contract: it currently supports Claude Code for implementation and Codex CLI for review, and stops if either required adapter is unavailable.
 
 See [Claude Code integration](references/claude-code-integration.md).
 
@@ -217,7 +219,9 @@ When verifiable immutable/versioned release provenance is available, Forge prefe
 
 See [BOOTSTRAP.md](BOOTSTRAP.md).
 
-## Usage
+## Skill usage
+
+These commands are instructions to the Claude Code skill. They are separate from the optional shell runner described below.
 
 ```text
 /forge new [scope]
@@ -275,11 +279,28 @@ See [BOOTSTRAP.md](BOOTSTRAP.md) and [release guidance](docs/RELEASING.md) for p
 
 Forge does not silently require every existing project to upgrade when a newer release appears.
 
+## Optional local runner
+
+The runner executes one already-planned Work Packet using Claude Code, creates a Git checkpoint, and asks Codex CLI to review that checkpoint. It requires a valid Control Mode project, local CLI authentication, a clean Git checkout, and exclusive editing ownership during execution. It makes local commits; it does not push or open a PR.
+
+After installing Forge and preparing the project, run these from the **project repository**, with `FORGE_DIR` pointing to the installed or reviewed Forge package:
+
+```bash
+FORGE_DIR="$HOME/.claude/skills/forge"
+"$FORGE_DIR/scripts/forge" doctor
+"$FORGE_DIR/scripts/forge" run WP-1.1
+"$FORGE_DIR/scripts/forge" --verbose status WP-1.1
+```
+
+Use the actual active packet ID. A review pass means that the checkpoint passed the configured review; the controller must still reconcile requirement evidence, acceptance, validation, and the next approved work. The runner does not generate the requirements baseline or complete Convergence for you.
+
+See the [runner setup and recovery guide](docs/runner.md) for prerequisites, profile setup, state files, and interruption handling.
+
 ## Evaluation status
 
 Forge includes behavioral regression scenarios and an **executable core benchmark instrument**.
 
-The A/B harness provides real fixture repositories, hidden REQ-tagged tests, deterministic scoring, raw evidence capture, container-isolated fresh agent sessions, verified immutable Forge loading, activation preflight, paired/randomized arm order, and a genuine two-session context-loss test.
+The A/B harness provides fixture repositories, hidden REQ-tagged tests, deterministic scoring, raw evidence capture, container-based agent and scoring isolation for real runs, verified immutable Forge loading, activation preflight, paired/randomized arm order, and a two-session context-loss test. Host mock runs test scoring behavior without launching real providers or exercising the container boundary.
 
 **No with-Forge vs no-Forge performance claims are published yet.** Mock self-tests validate the benchmark instrument only. We will not invent pass rates.
 
@@ -294,7 +315,9 @@ See [evals/README.md](evals/README.md), [CORE-BENCHMARKS.md](evals/CORE-BENCHMAR
 
 ## What Forge is not
 
-Forge is not a fixed framework, mandatory folder tree, fixed agent roster, universal TDD regime, or excuse to spawn many agents.
+Forge is not a standalone project manager or an autonomous guarantee of project completion. Requirements quality, business correctness, authorization, and final reconciliation still depend on the controller and project evidence. The generic state validator checks accounting and structure; it cannot prove that recorded requirements are complete or that test results are true.
+
+Forge does not prescribe a fixed framework, mandatory folder tree, fixed agent roster, or universal TDD regime.
 
 A one-line low-risk change should still feel like a one-line low-risk change.
 
@@ -328,7 +351,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Version
 
-Current version: **1.7.1**
+The package version is recorded in [VERSION](VERSION); see [CHANGELOG.md](CHANGELOG.md) for release changes. A checkout may contain unreleased changes after that version.
 
 ## License
 

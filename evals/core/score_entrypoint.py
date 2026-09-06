@@ -2,7 +2,7 @@
 """Run benchmark scoring inside an isolated container.
 
 The candidate repository is mounted read-only at /input and copied into a
-throwaway /work tree before any tests execute. Only the final trusted JSON
+throwaway /work tree before any tests execute. Only the final structured JSON
 result is emitted on stdout; scorer diagnostics go to stderr.
 """
 from __future__ import annotations
@@ -67,6 +67,19 @@ def build_command(args: argparse.Namespace) -> list[str]:
     return command
 
 
+def validate_result(payload: object, scenario: str, phase: str) -> None:
+    if not isinstance(payload, dict) or payload.get("scenario") != scenario:
+        raise ValueError("isolated scorer result has the wrong scenario")
+    if phase == "stage1" and payload.get("phase") != "stage1":
+        raise ValueError("isolated scorer result has the wrong phase")
+    assertions = payload.get("assertions")
+    if not isinstance(assertions, dict) or not assertions or any(type(value) is not bool for value in assertions.values()):
+        raise ValueError("isolated scorer assertions must be nonempty booleans")
+    failures = [key for key, value in assertions.items() if not value]
+    if type(payload.get("pass")) is not bool or payload["pass"] != (not failures) or payload.get("failed_assertions") != failures:
+        raise ValueError("isolated scorer result contradicts its assertions")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--phase", choices=("stage1", "final"), default="final")
@@ -100,8 +113,7 @@ def main() -> int:
         payload = json.loads(RESULT_PATH.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise SystemExit(f"isolated scorer did not produce valid JSON: {exc}") from exc
-    if not isinstance(payload, dict):
-        raise SystemExit("isolated scorer result must be a JSON object")
+    validate_result(payload, args.scenario, args.phase)
 
     json.dump(payload, sys.stdout, sort_keys=True)
     sys.stdout.write("\n")

@@ -43,15 +43,15 @@ The runnable benchmark lives in [`core/`](core/README.md). It provides:
 - real fixture repositories derived from one reference application
 - hidden REQ-tagged tests and invariant tests
 - deterministic scorer and report generator
-- container isolation for real agent runs
+- separate agent and scoring containers for real runs, with bounded filesystem access
 - verified immutable Forge-release loading
-- Forge activation preflight
+- Forge package discoverability/readability preflight
 - paired/interleaved cells with deterministic randomized arm ordering
 - genuine two-session B3 context-loss boundary
 - raw evidence retention
 - reference/no-op/drifter mock agents for harness self-testing
 
-CI runs only the deterministic mock self-tests. Mock outcomes prove that the instrument can pass satisfiable fixtures and fail missing/drifting/bureaucratic behavior; they are **not** Forge benchmark results.
+CI exercises deterministic mock self-tests and dedicated container-isolation regressions when relevant files change. Mock outcomes show that the scorer can pass the reference fixtures and reject the included no-op/drifting behavior; they are **not** Forge benchmark results. Container checks test specific isolation properties, not all possible adversarial behavior.
 
 ## Conditions
 
@@ -79,7 +79,9 @@ Weaker:
 - let agents read hidden tests or scorer code
 - claim a fresh baseline from a conversation that already knows Forge
 
-`evals.json` remains the broad behavioral regression suite. `bootstrap-evals.json` covers remote bootstrap and explicit-name invocation. `CORE-BENCHMARKS.md` defines the empirical benchmark contract, and `core/` implements it.
+`evals.json` remains the broad behavioral regression specification; its expectations require an agent-evaluation run and are not executed by package validation. `bootstrap-evals.json` covers remote bootstrap and explicit-name invocation. `CORE-BENCHMARKS.md` defines the empirical benchmark contract, and `core/` implements it.
+
+The scorer runs project code in a separate container to protect the controller host. Hidden tests are withheld from the implementation agent, but scoring is not a proof against adversarial manipulation of the test process. The activation preflight verifies that the package can be found and read; it does not prove that subsequent benchmark sessions follow Forge. See [the harness limits](core/README.md#known-limits).
 
 ## Published results
 

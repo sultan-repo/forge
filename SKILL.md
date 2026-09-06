@@ -109,7 +109,7 @@ Read [BOOTSTRAP.md](BOOTSTRAP.md).
 
 Forge includes an optional local runner under `scripts/forge` for projects that explicitly configure external-agent execution. The example profile uses one implementation owner and one independent read-only reviewer, with inherited CLI authentication, immutable Git checkpoints, bounded review cycles, resumable execution state, and concise user-facing output.
 
-Use `scripts/forge doctor` before the first run and `scripts/forge run [WP-ID]` only when the project is already in Control Mode with a valid active Work Packet. The runner is an execution primitive, not a replacement for Forge requirements, authority, reconciliation, or Convergence.
+From the project repository, use the installed package’s `scripts/forge doctor` before the first run and `scripts/forge run [WP-ID]` only with a valid active Work Packet. A review pass is tied to a checkpoint; the controller still verifies evidence and reconciles the packet before completion. See [runner setup and recovery](docs/runner.md).
 
 ## Definition of done
 

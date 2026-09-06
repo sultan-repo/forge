@@ -6,7 +6,7 @@ Load this reference when eliciting, challenging, consolidating, or changing requ
 
 Ask questions only when answers can materially alter objective, scope, behavior, architecture, data, security/privacy, operations, integrations, cost, deployment, acceptance criteria, or sequencing.
 
-Prefer batches of roughly 3-7 related questions when practical.
+Ask the fewest material questions needed to proceed, grouping related decisions when that reduces interruption. Use available repository evidence before asking.
 
 Stop interviewing when remaining uncertainty can safely be represented as reversible assumptions, evidence gaps, or deferred items.
 
@@ -73,7 +73,7 @@ Mark meaningful exclusions as Not Applicable when ambiguity would otherwise rema
 
 ## Readiness baseline
 
-A material requirements baseline should normally contain:
+Reuse existing requirements and project documents. The following are coverage prompts for a material baseline, not mandatory sections or separate artifacts; include only what the project needs:
 
 1. Ultimate objective
 2. Success measures

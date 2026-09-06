@@ -53,17 +53,103 @@ def load_state(path: Path) -> ControlState:
     return raw
 
 
+def shape_errors(state: ControlState) -> list[str]:
+    """Check JSON shapes before traversing references or comparing revisions."""
+    errors: list[str] = []
+
+    def strings(value: Any, label: str, *, unique: bool = False) -> None:
+        if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+            errors.append(f"{label} must be an array of strings")
+        elif unique and len(value) != len(set(value)):
+            errors.append(f"{label} must not contain duplicates")
+
+    def revision(value: Any, label: str) -> None:
+        if type(value) is not int or value < 1:
+            errors.append(f"{label} must be integer >= 1")
+
+    if not isinstance(state.get("baseline_id"), str) or not state["baseline_id"].strip():
+        errors.append("baseline_id must be a nonempty string")
+    if not isinstance(state.get("last_reconciliation"), dict):
+        errors.append("last_reconciliation must be an object")
+    for key in ("baseline_revision", "plan_revision"):
+        revision(state.get(key), key)
+    for key in ("active_milestones", "active_work_packets", "resume_queue"):
+        strings(state.get(key), key, unique=key != "resume_queue")
+    for key in ("plan_deltas", "archived_plan_deltas"):
+        if not isinstance(state.get(key), list):
+            errors.append(f"{key} must be an array")
+    for group in ("requirements", "milestones", "work_packets"):
+        items = state.get(group)
+        if not isinstance(items, dict):
+            errors.append(f"{group} must be an object")
+            continue
+        for identifier, item in items.items():
+            label = f"{group}.{identifier}"
+            if not isinstance(item, dict):
+                errors.append(f"{label} must be an object")
+                continue
+            if not isinstance(item.get("status"), str):
+                errors.append(f"{label}.status must be a string")
+            list_keys: tuple[str, ...] = ("work_packets",) if group == "requirements" else ("requirements",)
+            if group == "work_packets":
+                list_keys += ("dependencies",)
+                for key in ("baseline_revision", "plan_revision"):
+                    revision(item.get(key), f"{label}.{key}")
+            for key in list_keys:
+                strings(item.get(key, []), f"{label}.{key}")
+            reference_keys: tuple[str, ...] = ("milestone",) if group == "requirements" else ()
+            if group == "work_packets":
+                reference_keys = ("parent", "return_to")
+            for key in reference_keys:
+                if item.get(key) is not None and not isinstance(item[key], str):
+                    errors.append(f"{label}.{key} must be a string or null")
+    gates = state.get("gates")
+    if not isinstance(gates, dict):
+        errors.append("gates must be an object")
+    else:
+        for name in ("plan_consistency", "convergence"):
+            gate = gates.get(name)
+            if not isinstance(gate, dict):
+                errors.append(f"gates.{name} must be an object")
+                continue
+            if not isinstance(gate.get("status"), str):
+                errors.append(f"gates.{name}.status must be a string")
+            for key in ("baseline_revision", "plan_revision"):
+                revision(gate.get(key), f"gates.{name}.{key}")
+    return errors
+
+
+def cyclic_references(graph: dict[str, list[str]]) -> list[str]:
+    """Find cycles without recursion so a long roadmap remains safe to validate."""
+    incoming = dict.fromkeys(graph, 0)
+    for edges in graph.values():
+        for target in edges:
+            if target in incoming:
+                incoming[target] += 1
+    ready = [node for node, count in incoming.items() if count == 0]
+    while ready:
+        node = ready.pop()
+        for target in graph[node]:
+            if target in incoming:
+                incoming[target] -= 1
+                if incoming[target] == 0:
+                    ready.append(target)
+    return sorted(node for node, count in incoming.items() if count > 0)
+
+
 def validate_state(state: ControlState) -> tuple[list[str], list[str]]:
     """Return validation errors and warnings for a Forge control state."""
-    errors: list[str] = []
+    errors = shape_errors(state)
     warnings: list[str] = []
+    if errors:
+        return errors, warnings
 
     if state.get("version") != 3:
         errors.append("version must be 3")
 
     for key in ("baseline_revision", "plan_revision"):
         value = state.get(key)
-        if not isinstance(value, int) or value < 1:
+        if type(value) is not int or value < 1:
             errors.append(f"{key} must be integer >= 1")
 
     for key in (
@@ -218,8 +304,8 @@ def validate_state(state: ControlState) -> tuple[list[str], list[str]]:
         from_revision = delta.get("from_plan_revision")
         to_revision = delta.get("to_plan_revision")
         if (
-            not isinstance(from_revision, int)
-            or not isinstance(to_revision, int)
+            type(from_revision) is not int
+            or type(to_revision) is not int
             or to_revision != from_revision + 1
         ):
             errors.append(f"plan delta {delta_id or '?'}: revisions must be consecutive integers")
@@ -228,6 +314,9 @@ def validate_state(state: ControlState) -> tuple[list[str], list[str]]:
 
     for delta in state.get("archived_plan_deltas", []):
         delta_id = delta.get("id") if isinstance(delta, dict) else delta
+        if not isinstance(delta_id, str) or not delta_id.strip():
+            errors.append("archived plan delta must be a nonempty ID or an object with an ID")
+            continue
         if delta_id is not None and str(delta_id) in seen_delta_ids:
             errors.append(f"plan delta {delta_id}: appears in both active and archived lists")
         if delta_id:
@@ -238,7 +327,7 @@ def validate_state(state: ControlState) -> tuple[list[str], list[str]]:
 
     canonicalized = state.get("canonicalized_through_plan_revision")
     if canonicalized is not None:
-        if not isinstance(canonicalized, int) or canonicalized < 1:
+        if type(canonicalized) is not int or canonicalized < 1:
             errors.append("canonicalized_through_plan_revision must be >=1")
         elif isinstance(current_plan, int) and canonicalized > current_plan:
             errors.append("canonicalized_through_plan_revision cannot exceed plan_revision")
@@ -268,6 +357,15 @@ def validate_state(state: ControlState) -> tuple[list[str], list[str]]:
                 warnings.append(
                     "plan_consistency gate revisions differ from current baseline/plan; targeted re-analysis may be required"
                 )
+
+    for relation in ("parent", "dependencies"):
+        graph = {
+            packet_id: [packet.get(relation)] if relation == "parent" else packet.get(relation, [])
+            for packet_id, packet in work_packets.items()
+        }
+        cycles = cyclic_references(graph)
+        if cycles:
+            errors.append(f"work packet {relation} references contain a cycle: {', '.join(cycles)}")
 
     return errors, warnings
 

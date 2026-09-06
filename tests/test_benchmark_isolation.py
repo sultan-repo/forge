@@ -25,10 +25,12 @@ def docker_available() -> bool:
 
 @pytest.mark.skipif(not docker_available(), reason="Docker is required for scorer isolation test")
 def test_benchmark_scoring_cannot_write_outside_candidate(tmp_path: Path) -> None:
-    subprocess.run([sys.executable, str(CORE / "build_fixtures.py"), "b4"], check=True)
-    source = CORE / "build" / "b4"
+    fixtures = tmp_path / "fixtures"
+    subprocess.run([sys.executable, str(CORE / "build_fixtures.py"), "--out", str(fixtures), "b4"], check=True)
+    source = fixtures / "b4"
     repo = tmp_path / "repo"
     shutil.copytree(source, repo)
+    subprocess.run([sys.executable, str(CORE / "mock_agent.py"), "reference", "b4", "main"], cwd=repo, check=True)
 
     sentinel = tmp_path / "outside" / "sentinel.txt"
     (repo / "conftest.py").write_text(
@@ -66,7 +68,7 @@ def test_benchmark_scoring_cannot_write_outside_candidate(tmp_path: Path) -> Non
         encoding="utf-8",
     )
     transcript = tmp_path / "transcript.jsonl"
-    transcript.write_text("", encoding="utf-8")
+    transcript.write_text(json.dumps({"type": "result", "subtype": "success", "is_error": False}), encoding="utf-8")
 
     command = [
         "docker",
@@ -115,4 +117,24 @@ def test_benchmark_scoring_cannot_write_outside_candidate(tmp_path: Path) -> Non
     assert completed.returncode == 0, completed.stderr
     payload = json.loads(completed.stdout)
     assert payload["scenario"] == "b4"
+    assert payload["assertions"]["required_requirements_pass"]
+    assert not payload["pass"], "candidate hook errors must fail visible tests"
     assert not sentinel.exists(), "candidate pytest hook escaped the scoring container"
+
+
+@pytest.mark.skipif(not docker_available(), reason="Docker is required for container lifecycle test")
+def test_agent_container_is_removed_on_timeout(tmp_path: Path) -> None:
+    cidfile = tmp_path / "container-id"
+    command = [
+        sys.executable, str(CORE / "container_run.py"), "docker", "3",
+        "--network", "none", "--cidfile", str(cidfile), IMAGE,
+        "python3", "-c", "import time; time.sleep(60)",
+    ]
+    completed = subprocess.run(command, capture_output=True, text=True, timeout=45, check=False)
+    assert completed.returncode == 124, completed.stderr
+    assert cidfile.exists(), "container did not start before the test deadline"
+    inspected = subprocess.run(
+        ["docker", "container", "inspect", cidfile.read_text().strip()],
+        capture_output=True, text=True, check=False,
+    )
+    assert inspected.returncode != 0, "timed-out container was left running"

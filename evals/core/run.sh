@@ -10,24 +10,19 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CALLER_DIR="$PWD"
 cd "$HERE"
-
-# Materialize the compact fixture bundle into an ignored working file.
-python3 - <<'PY'
-import base64
-import gzip
-from pathlib import Path
-
-root = Path.cwd()
-encoded = (root / "fixture_bundle.json.gz.b64").read_text(encoding="ascii")
-(root / "fixture_bundle.json").write_bytes(gzip.decompress(base64.b64decode(encoded)))
-PY
 
 SCENARIOS="b1,b2,b3,b4"
 CONDITIONS="baseline,forge"
 RUNS=5
 OUT=""
 while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --scenarios|--conditions|--runs|--out)
+      [[ $# -ge 2 && "$2" != --* ]] || { echo "missing value for $1" >&2; exit 2; }
+      ;;
+  esac
   case "$1" in
     --scenarios) SCENARIOS="$2"; shift 2 ;;
     --conditions) CONDITIONS="$2"; shift 2 ;;
@@ -39,18 +34,77 @@ done
 
 : "${MAX_TURNS:=80}"
 : "${AGENT_TIMEOUT:=2400}"
+: "${SCORER_TIMEOUT:=1500}"
 : "${PERMISSION_FLAGS:=--dangerously-skip-permissions}"
 : "${FORGE_INVOCATION:=Use Forge for the following task.}"
 : "${FORGE_REPO:=sultan-repo/forge}"
 : "${BENCH_SEED:=1701}"
-: "${BENCH_AGENT_IMAGE:=forge-bench-agent:stable}"
-: "${BENCH_SCORER_IMAGE:=forge-bench-scorer:stable}"
 : "${CLAUDE_CODE_CHANNEL:=stable}"
+: "${BENCH_AGENT_IMAGE:=forge-bench-agent:$CLAUDE_CODE_CHANNEL}"
+# Include scorer source in the default tag so an older cached image can never
+# silently score a newer controller run.
+SCORER_SOURCE_SHA256="$(python3 - <<'PY'
+import hashlib
+from pathlib import Path
 
-OUT="${OUT:-results/$(date -u +%Y%m%dT%H%M%SZ)}"
-mkdir -p "$OUT"
-OUT="$(cd "$OUT" && pwd)"
+digest = hashlib.sha256()
+for name in ("container/ScorerContainerfile", "assert_run.py", "score_entrypoint.py", "fixture_bundle.py", "fixture_bundle.json.gz.b64"):
+    digest.update(name.encode())
+    digest.update(Path(name).read_bytes())
+print(digest.hexdigest())
+PY
+)"
+: "${BENCH_SCORER_IMAGE:=forge-bench-scorer:${SCORER_SOURCE_SHA256:0:16}}"
+
 : "${BENCH_MOCK_AGENT:=}"
+python3 - "$SCENARIOS" "$CONDITIONS" "$RUNS" "$BENCH_SEED" "$MAX_TURNS" "$AGENT_TIMEOUT" "$SCORER_TIMEOUT" "$BENCH_MOCK_AGENT" <<'PY'
+import sys
+
+for label, value, allowed in (("scenarios", sys.argv[1], {"b1", "b2", "b3", "b4"}),
+                              ("conditions", sys.argv[2], {"baseline", "forge"})):
+    items = value.split(",")
+    if not set(items) <= allowed or len(items) != len(set(items)):
+        raise SystemExit(f"invalid or duplicate {label}: {value}")
+for label, value in zip(("runs", "seed", "max turns", "agent timeout", "scorer timeout"), sys.argv[3:8]):
+    try:
+        number = int(value)
+    except ValueError:
+        raise SystemExit(f"{label} must be an integer") from None
+    if label != "seed" and number <= 0:
+        raise SystemExit(f"{label} must be positive")
+if sys.argv[8] not in ("", "reference", "noop", "drifter"):
+    raise SystemExit("unknown BENCH_MOCK_AGENT")
+PY
+if [[ -z "$OUT" ]]; then
+  mkdir -p "$HERE/results"
+  OUT="$(mktemp -d "$HERE/results/$(date -u +%Y%m%dT%H%M%SZ)-XXXXXX")"
+else
+  [[ "$OUT" == /* ]] || OUT="$CALLER_DIR/$OUT"
+  python3 - "$OUT" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+path.mkdir(parents=True, exist_ok=True)
+if any(path.iterdir()):
+    raise SystemExit(f"output directory must be empty to preserve existing evidence: {path}")
+PY
+fi
+OUT="$(cd "$OUT" && pwd)"
+# Claim even an explicitly supplied empty output before writing any evidence.
+mkdir "$OUT/.running" || { echo "output directory is already in use: $OUT" >&2; exit 2; }
+CREDENTIAL_FILES=()
+cleanup() {
+  local credential
+  for credential in "${CREDENTIAL_FILES[@]-}"; do
+    [[ -n "$credential" ]] || continue
+    rm -f "$credential"
+  done
+  rmdir "$OUT/.running" 2>/dev/null || true
+}
+trap cleanup EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
 MOCK=false
 [[ -n "$BENCH_MOCK_AGENT" ]] && MOCK=true
 
@@ -68,6 +122,9 @@ FORGE_COMMIT=""
 FORGE_ASSET_SHA256=""
 FORGE_VERIFIED=false
 FORGE_PROVENANCE="none"
+# Releases contain developer evaluations as well as the runtime skill. Never
+# mount those evaluations (including reference solutions) into an agent arm.
+FORGE_RUNTIME_ITEMS=(SKILL.md README.md BOOTSTRAP.md VERSION LICENSE references templates scripts docs/runner.md)
 
 prepare_forge() {
   [[ "$HAS_FORGE" == true ]] || return 0
@@ -84,6 +141,7 @@ prepare_forge() {
       echo "FORGE_DIR is unverified candidate input. Set ALLOW_UNVERIFIED_FORGE=1 for candidate/ablation runs." >&2
       exit 2
     }
+    [[ "$FORGE_DIR" == /* ]] || FORGE_DIR="$CALLER_DIR/$FORGE_DIR"
     FORGE_SRC="$(cd "$FORGE_DIR" && pwd)"
     (cd "$FORGE_SRC" && python3 scripts/validate-skill-package.py) >"$OUT/forge-validate.log" 2>&1
     FORGE_VERSION="$(tr -d '[:space:]' < "$FORGE_SRC/VERSION")"
@@ -153,6 +211,7 @@ PY
   mkdir -p "$unpack"
   python3 - "$rel_dir/$asset" "$unpack" <<'PY'
 import pathlib
+import stat
 import sys
 import zipfile
 
@@ -163,6 +222,14 @@ with zipfile.ZipFile(source) as archive:
         if path.is_absolute() or ".." in path.parts:
             raise SystemExit(f"unsafe archive member: {info.filename}")
     archive.extractall(destination)
+    # ZipFile deliberately drops Unix permission metadata. Git release archives
+    # use it for executable launchers, which package validation must preserve.
+    # Restore only execute bits on regular files, never special permission bits.
+    for info in archive.infolist():
+        mode = info.external_attr >> 16
+        if stat.S_ISREG(mode):
+            path = destination / pathlib.PurePosixPath(info.filename)
+            path.chmod((path.stat().st_mode & 0o666) | (mode & 0o111))
 PY
   FORGE_SRC="$unpack/forge"
   [[ -f "$FORGE_SRC/SKILL.md" && -f "$FORGE_SRC/VERSION" ]] || {
@@ -175,7 +242,7 @@ PY
     echo "Verified release tag $FORGE_TAG does not match package VERSION $FORGE_VERSION" >&2
     exit 2
   }
-  FORGE_COMMIT="$(gh api "repos/$FORGE_REPO/releases/tags/$FORGE_TAG" --jq '.target_commitish')"
+  FORGE_COMMIT="$(gh api "repos/$FORGE_REPO/commits/$FORGE_TAG" --jq '.sha')"
   FORGE_VERIFIED=true
   FORGE_PROVENANCE="github-immutable-release-attestation"
 }
@@ -211,13 +278,13 @@ ensure_container() {
   fi
   CONTAINER_IMAGE_ID="$("$CONTAINER_RUNTIME" image inspect "$BENCH_AGENT_IMAGE" --format '{{.Id}}' 2>/dev/null || true)"
   SCORER_IMAGE_ID="$("$CONTAINER_RUNTIME" image inspect "$BENCH_SCORER_IMAGE" --format '{{.Id}}' 2>/dev/null || true)"
-  AGENT_DESC="$("$CONTAINER_RUNTIME" run --rm "$BENCH_AGENT_IMAGE" claude --version 2>/dev/null | head -1)"
-  [[ -n "$AGENT_DESC" ]] || {
-    echo "Benchmark agent image does not expose a working 'claude' executable." >&2
+  [[ -n "$CONTAINER_IMAGE_ID" && -n "$SCORER_IMAGE_ID" ]] || {
+    echo "Benchmark container images could not be resolved." >&2
     exit 2
   }
-  [[ -n "$SCORER_IMAGE_ID" ]] || {
-    echo "Benchmark scorer image could not be resolved." >&2
+  AGENT_DESC="$(python3 "$HERE/container_run.py" "$CONTAINER_RUNTIME" 30 --network none "$CONTAINER_IMAGE_ID" claude --version 2>/dev/null | head -1)"
+  [[ -n "$AGENT_DESC" ]] || {
+    echo "Benchmark agent image does not expose a working 'claude' executable." >&2
     exit 2
   }
 }
@@ -230,6 +297,8 @@ copy_credentials() {
       exit 2
     }
     cp "$HOME/.claude/.credentials.json" "$cfg/.credentials.json"
+    chmod 600 "$cfg/.credentials.json"
+    CREDENTIAL_FILES+=("$cfg/.credentials.json")
   elif [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
     echo "Set ANTHROPIC_API_KEY or COPY_CREDENTIALS=1 for real benchmark runs." >&2
     exit 2
@@ -243,7 +312,13 @@ make_config() {
   if [[ "$condition" == "forge" && "$MOCK" == false ]]; then
     [[ -n "$FORGE_SRC" ]] || { echo "Forge source missing" >&2; exit 2; }
     mkdir -p "$cfg/skills/forge"
-    cp -a "$FORGE_SRC/." "$cfg/skills/forge/"
+    local item
+    for item in "${FORGE_RUNTIME_ITEMS[@]}"; do
+      if [[ -e "$FORGE_SRC/$item" ]]; then
+        mkdir -p "$cfg/skills/forge/$(dirname "$item")"
+        cp -a "$FORGE_SRC/$item" "$cfg/skills/forge/$item"
+      fi
+    done
   fi
   [[ "$MOCK" == true ]] || copy_credentials "$cfg"
 }
@@ -259,13 +334,13 @@ run_real_agent() {
   cmd+=("${perm[@]}")
 
   local rc=0
-  timeout "$timeout_s" "$CONTAINER_RUNTIME" run --rm -i \
+  python3 "$HERE/container_run.py" "$CONTAINER_RUNTIME" "$timeout_s" -i \
     --user "$(id -u):$(id -g)" \
     "${envargs[@]}" \
     -v "$repo:/workspace:rw" \
     -v "$cfg:/config:rw" \
     -w /workspace \
-    "$BENCH_AGENT_IMAGE" "${cmd[@]}" >"$transcript" 2>"$stderr" || rc=$?
+    "$CONTAINER_IMAGE_ID" "${cmd[@]}" >"$transcript" 2>"$stderr" || rc=$?
   return "$rc"
 }
 
@@ -274,21 +349,23 @@ run_agent() {
   mkdir -p "$outdir"
   printf '%s\n' "$prompt" >"$outdir/prompt.txt"
   local start end rc=0
-  start="$(date +%s.%N)"
+  start="$(python3 -c 'import time; print(time.monotonic())')"
   if [[ "$MOCK" == true ]]; then
     (cd "$repo" && python3 "$HERE/mock_agent.py" "$BENCH_MOCK_AGENT" "$scenario" "$stage") >"$outdir/stdout.txt" 2>"$outdir/stderr.txt" || rc=$?
     : >"$outdir/transcript.jsonl"
   else
     run_real_agent "$repo" "$cfg" "$prompt" "$outdir/transcript.jsonl" "$outdir/stderr.txt" "$MAX_TURNS" "$AGENT_TIMEOUT" || rc=$?
   fi
-  end="$(date +%s.%N)"
+  end="$(python3 -c 'import time; print(time.monotonic())')"
   python3 - "$outdir/meta-stage.json" "$rc" "$start" "$end" <<'PY'
 import json
+import os
 import sys
 
 path, rc, start, end = sys.argv[1], int(sys.argv[2]), float(sys.argv[3]), float(sys.argv[4])
 with open(path, "w", encoding="utf-8") as stream:
-    json.dump({"rc": rc, "timed_out": rc == 124, "wall_seconds": round(end - start, 2)}, stream, indent=2)
+    json.dump({"rc": rc, "timed_out": rc == 124, "wall_seconds": round(end - start, 2),
+               "mock": os.environ.get("MOCK") == "true"}, stream, indent=2)
 PY
 }
 
@@ -300,10 +377,10 @@ forge_activation_preflight() {
   cfg="$root/config"
   mkdir -p "$repo"
   printf '# Forge activation preflight\n' >"$repo/README.md"
-  (cd "$repo" && git init -q -b main && git -c user.name=bench -c user.email=b@x add . && git -c user.name=bench -c user.email=b@x commit -q -m init)
+  (cd "$repo" && git init -q -b main && git -c core.hooksPath=/dev/null add . && git -c core.hooksPath=/dev/null -c commit.gpgSign=false -c user.name=bench -c user.email=b@x commit -q -m init)
   make_config "$cfg" forge
   marker="FORGE_ACTIVE:$FORGE_VERSION"
-  prompt="Use the Forge skill installed in your skill directory. Read its VERSION file and reply with exactly $marker and nothing else. Do not modify the repository."
+  prompt="Use the Forge skill installed in your skill directory. Read its VERSION file and reply with FORGE_ACTIVE: followed by the exact version from that file, and nothing else. Do not modify the repository."
   run_real_agent "$repo" "$cfg" "$prompt" "$root/transcript.jsonl" "$root/stderr.txt" 8 240 || rc=$?
   [[ $rc -eq 0 ]] || { echo "Forge activation preflight agent failed rc=$rc" >&2; exit 2; }
   python3 - "$root/transcript.jsonl" "$marker" <<'PY'
@@ -313,32 +390,26 @@ import sys
 
 path = pathlib.Path(sys.argv[1])
 marker = sys.argv[2]
-texts = []
+results = []
 for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
     try:
         event = json.loads(line)
     except json.JSONDecodeError:
         continue
-    if event.get("type") == "assistant":
-        for block in (event.get("message") or {}).get("content", []) or []:
-            if isinstance(block, dict) and block.get("type") == "text":
-                texts.append(block.get("text", ""))
-    if event.get("type") == "result" and isinstance(event.get("result"), str):
-        texts.append(event["result"])
-text = "\n".join(texts)
-if marker not in text:
-    raise SystemExit(f"Forge activation preflight failed: expected {marker!r} in assistant output")
+    if isinstance(event, dict) and event.get("type") == "result":
+        results.append(event)
+if len(results) != 1 or results[0].get("is_error") or results[0].get("subtype") != "success" or results[0].get("result", "").strip() != marker:
+    raise SystemExit(f"Forge activation preflight failed: expected exact successful result {marker!r}")
 PY
   printf 'PASS %s\n' "$marker" >"$OUT/forge-activation.log"
 }
 
 get_prompt() {
   python3 - "$1" <<'PY'
-import json
-import pathlib
 import sys
+from fixture_bundle import load_bundle
 
-bundle = json.loads((pathlib.Path.cwd() / "fixture_bundle.json").read_text(encoding="utf-8"))
+bundle = load_bundle()
 key = sys.argv[1]
 try:
     print(bundle["prompts"][key], end="")
@@ -353,10 +424,10 @@ bench_git() {
   local repo="$1"
   shift
   if [[ "$MOCK" == true ]]; then
-    git -C "$repo" -c core.hooksPath=/dev/null -c core.fsmonitor=false "$@"
+    git -C "$repo" -c core.hooksPath=/dev/null -c core.fsmonitor=false -c commit.gpgSign=false "$@"
     return
   fi
-  "$CONTAINER_RUNTIME" run --rm \
+  python3 "$HERE/container_run.py" "$CONTAINER_RUNTIME" "$SCORER_TIMEOUT" \
     --network none \
     --read-only \
     --cap-drop ALL \
@@ -366,8 +437,8 @@ bench_git() {
     -e HOME=/tmp \
     -v "$repo:/workspace:rw" \
     -w /workspace \
-    "$BENCH_SCORER_IMAGE" \
-    git -c safe.directory=/workspace -c core.hooksPath=/dev/null -c core.fsmonitor=false "$@"
+    "$SCORER_IMAGE_ID" \
+    git -c safe.directory=/workspace -c core.hooksPath=/dev/null -c core.fsmonitor=false -c commit.gpgSign=false "$@"
 }
 
 print_score_progress() {
@@ -421,7 +492,7 @@ score_assertion() {
     args+=(--stage1-result /evidence/stage1-result.json)
   fi
 
-  "$CONTAINER_RUNTIME" run --rm \
+  python3 "$HERE/container_run.py" "$CONTAINER_RUNTIME" "$SCORER_TIMEOUT" \
     --network none \
     --read-only \
     --cap-drop ALL \
@@ -432,7 +503,7 @@ score_assertion() {
     --tmpfs /work:rw,nosuid,nodev,size=512m,mode=1777 \
     --tmpfs /tmp:rw,nosuid,nodev,size=256m,mode=1777 \
     "${mounts[@]}" \
-    "$BENCH_SCORER_IMAGE" \
+    "$SCORER_IMAGE_ID" \
     "${args[@]}" >"$tmp_out"
 
   python3 - "$tmp_out" <<'PY'
@@ -451,7 +522,7 @@ PY
 
 prepare_forge
 ensure_container
-python3 build_fixtures.py >/dev/null
+python3 build_fixtures.py --out "$OUT/fixtures" "${SC[@]}" >/dev/null
 forge_activation_preflight
 
 if [[ "$MOCK" == true ]]; then
@@ -462,6 +533,8 @@ fi
 export OUT FORGE_TAG FORGE_VERSION FORGE_COMMIT FORGE_ASSET_SHA256 FORGE_VERIFIED FORGE_PROVENANCE
 export AGENT_DESC CLAUDE_MODEL MAX_TURNS AGENT_TIMEOUT FORGE_INVOCATION SCENARIOS CONDITIONS RUNS BENCH_SEED
 export CONTAINER_RUNTIME CONTAINER_IMAGE_ID SCORER_IMAGE_ID BENCH_AGENT_IMAGE BENCH_SCORER_IMAGE MOCK
+export SCORER_SOURCE_SHA256 SCORER_TIMEOUT
+export FORGE_RUNTIME_PATHS="${FORGE_RUNTIME_ITEMS[*]}"
 python3 - <<'PY'
 import datetime
 import json
@@ -478,6 +551,7 @@ obj = {
     "forge_asset_sha256": os.environ.get("FORGE_ASSET_SHA256"),
     "forge_verified": os.environ.get("FORGE_VERIFIED") == "true",
     "forge_provenance": os.environ.get("FORGE_PROVENANCE"),
+    "forge_runtime_paths": os.environ["FORGE_RUNTIME_PATHS"].split(),
     "agent": os.environ.get("AGENT_DESC"),
     "model": os.environ.get("CLAUDE_MODEL") or "default",
     "max_turns": int(os.environ["MAX_TURNS"]),
@@ -494,6 +568,8 @@ obj = {
     "agent_container_image_id": os.environ.get("CONTAINER_IMAGE_ID"),
     "scorer_container_image": os.environ.get("BENCH_SCORER_IMAGE"),
     "scorer_container_image_id": os.environ.get("SCORER_IMAGE_ID"),
+    "scorer_source_sha256": os.environ.get("SCORER_SOURCE_SHA256"),
+    "scorer_timeout_s": int(os.environ["SCORER_TIMEOUT"]),
     "scorer_network": "not-applicable" if mock else "none",
     "b3_boundary": "fresh-config-second-session",
 }
@@ -538,6 +614,7 @@ write_final_meta() {
   local path="$1" scenario="$2" condition="$3" run="$4" wall="$5" rc="$6" timeout_flag="$7" repo="$8" transcript="$9" stderr="${10}" diff="${11}" stage1="${12:-}"
   python3 - "$path" "$scenario" "$condition" "$run" "$wall" "$rc" "$timeout_flag" "$repo" "$transcript" "$stderr" "$diff" "$stage1" "$FORGE_COMMIT" <<'PY'
 import json
+import os
 import sys
 
 (path, scenario, condition, run, wall, rc, timed_out, repo, transcript, stderr, diff, stage1, commit) = sys.argv[1:]
@@ -549,6 +626,7 @@ obj = {
     "condition": condition,
     "run": int(run),
     "rc": int(rc),
+    "mock": os.environ.get("MOCK") == "true",
     "timed_out": timed_out == "true",
     "wall_seconds": float(wall),
     "forge_commit": commit,
@@ -563,7 +641,7 @@ run_one() {
   local scenario="$1" condition="$2" run_number="$3"
   local dir="$OUT/$scenario/$condition/run-$run_number" repo="$OUT/$scenario/$condition/run-$run_number/repo"
   mkdir -p "$dir"
-  cp -a "build/$scenario" "$repo"
+  cp -a "$OUT/fixtures/$scenario" "$repo"
   local base
   base="$(git -C "$repo" rev-parse HEAD)"
 
