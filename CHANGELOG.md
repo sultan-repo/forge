@@ -1,22 +1,24 @@
 # Changelog
 
-## Unreleased
+## 1.9.0
 
-Repository validation and workflow hardening.
+Execution, benchmark, installation, release, and live-provider hardening release.
 
 - fixes explicit field types required by the live Codex structured-output API and surfaces terminal reviewer errors instead of truncating at startup warnings
 - documents Claude subscription/API-key precedence and CLI compatibility troubleshooting
+- validates one bounded real Claude Code -> Codex runner path using authenticated local CLIs while keeping provider/version compatibility claims narrow
 - rejects stale source/plan approvals, malformed recovery state, and mismatched review evidence; preserves partial work and restores invalid control JSON after adapter failures
 - stops agent subprocess groups on timeout or interruption and honors profile verbosity settings
 - validates malformed project-control data without tracebacks and rejects cyclic work-packet references
 - stages and validates installations before replacing an existing copy, with rollback and concurrent-install protection
 - prevents hidden benchmark fixtures from entering agent configurations; isolates hidden tests from candidate pytest hooks and gates scoring on successful execution
 - adds portable benchmark deadlines, per-run fixture directories, source-derived scorer image tags, exact release commit provenance, and credential cleanup
-- requires full successful validation of the current main commit before release publication and handles prereleases separately
-- expands deterministic regression coverage, repository-wide Python linting, and pinned development dependencies
+- requires full successful validation of the current main commit before release publication, re-checks main before immutable publication, and handles prereleases separately
+- updates CI to Node 24-native cache and Docker action majors and expands deterministic regression coverage, repository-wide Python linting, and pinned development dependencies
 - documents runner setup and recovery, corrects the walkthrough, and simplifies disproportionate methodology requirements
+- simplifies the README for normal users by moving advanced methodology detail behind focused documentation links
 
-Real-provider review quality and with-Forge versus no-Forge effectiveness remain unmeasured.
+One bounded real Claude Code -> Codex integration smoke test has passed. Broader provider/version compatibility, model-review quality, and real with-Forge versus no-Forge effectiveness remain unmeasured.
 
 ## 1.8.0
 
