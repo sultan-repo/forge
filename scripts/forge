@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ "${1:-}" == "preflight" ]]; then
+  shift
+  exec python3 "$SCRIPT_DIR/forge-preflight.py" "$@"
+fi
 exec python3 "$SCRIPT_DIR/forge-run.py" "$@"

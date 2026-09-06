@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Forge Project Preflight Preferences",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "execution_mode",
+    "claude_model_policy",
+    "codex_review_policy",
+    "live_preflight_required"
+  ],
+  "properties": {
+    "version": {"const": 1},
+    "execution_mode": {"enum": ["adaptive", "claude_only", "dual_agent"]},
+    "claude_model_policy": {"const": "current_cli"},
+    "codex_review_policy": {"enum": ["never", "explicit", "high_risk", "substantial"]},
+    "live_preflight_required": {"type": "boolean"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"execution_mode": {"const": "claude_only"}}, "required": ["execution_mode"]},
+      "then": {"properties": {"codex_review_policy": {"const": "never"}}}
+    },
+    {
+      "if": {"properties": {"execution_mode": {"const": "dual_agent"}}, "required": ["execution_mode"]},
+      "then": {"properties": {"codex_review_policy": {"const": "substantial"}}}
+    }
+  ]
+}
