@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.10.0
+
+Recovery, review-policy, and audit-hardening release.
+
 - makes independent Codex review request high reasoning effort per run without pinning a transient model name; unsupported effort fails closed instead of silently weakening review
 - makes skill invocation, bootstrap updates, help mode, and lifecycle-hook limits explicit; links all reference modules from the relevant guidance
 - validates skill identity and invocation settings inside actual frontmatter before replacing an installation
