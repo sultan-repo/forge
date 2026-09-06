@@ -51,6 +51,23 @@ A custom control path must remain inside the project's `.claude/` directory. Kee
 
 If the project profile is absent, the runner uses the bundled example defaults: Claude Code implementation, Codex review, up to three review cycles, and no fallback when a reviewer is unavailable. A project profile makes these choices explicit. Set `interaction.progress` or `interaction.detail` to `verbose` for phase progress or approval evidence details; `--verbose` enables both. Only the currently supported adapters and inherited authentication are accepted; this is not a general provider configuration system.
 
+## Account selection and CLI compatibility
+
+Forge inherits the environment and authentication of the CLIs it launches. In Claude's non-interactive mode, an exported `ANTHROPIC_API_KEY` takes precedence over a Claude Pro/Max login and uses API billing. A low API credit balance therefore does not establish that the subscription is exhausted. See [Claude's authentication precedence](https://code.claude.com/docs/en/authentication#authentication-precedence).
+
+To use an existing subscription login, exclude that override only for the process you launch:
+
+```bash
+env -u ANTHROPIC_API_KEY claude auth status
+env -u ANTHROPIC_API_KEY "$FORGE_DIR/scripts/forge" run WP-1.1
+```
+
+If the first command reports no login, start `env -u ANTHROPIC_API_KEY claude` and use `/login` with the subscription account. These commands do not delete a stored API key or change another shell's environment. Keep the key available for workloads that intentionally use API billing.
+
+Check `command -v codex` and `codex --version` when diagnosing reviewer startup errors. An `unknown variant` error while decoding model metadata can indicate that an older CLI cannot read the current service response. Follow the [Codex CLI update guidance](https://learn.chatgpt.com/docs/codex/cli), then retry the saved packet. Updating a separate installation does not change which binary Forge finds on `PATH`.
+
+CLI permissions still apply after authentication succeeds. If the implementer's test command needs approval in a non-interactive session, grant the intended command through the project's normal Claude permission settings or have the controller run it and retain the evidence. A source edit and a successful login do not prove that validation ran.
+
 ## What a run changes
 
 1. Validate project state and execution preconditions.
@@ -106,3 +123,5 @@ An interrupted implementation call may run again because the runner cannot prove
 ## Validation limits
 
 Deterministic tests use fake adapters and local subprocesses to exercise runner transitions, review contracts, and failure handling. They do not establish live Claude/Codex API compatibility, actual model review quality, or sandbox security. Validate live provider execution in an appropriately scoped project before depending on this optional integration operationally.
+
+A macOS smoke test on 2026-09-06 used Claude Code 2.1.259 with a Max login and Codex CLI 0.153.4. Claude fixed a bounded greeting function; Codex independently ran its three acceptance tests and approved the same checkpoint. Completion remained blocked until the controller reconciled the packet, after which control validation, status, and the completion hook passed. This establishes one observed integration result, not a supported-version matrix or evidence of comparative effectiveness.

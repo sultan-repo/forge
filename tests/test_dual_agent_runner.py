@@ -787,10 +787,56 @@ def test_reviewer_explicitly_disables_approval_escalation(tmp_path: Path, monkey
     codex_cli.CodexCLIReviewer().review("review prompt", tmp_path, ROOT / "templates/review-result.schema.json")
     command = seen["command"]
     assert command[:4] == ["codex", "--ask-for-approval", "never", "exec"]
+    assert "--json" in command
     assert command[command.index("--sandbox") + 1] == "read-only"
     assert "--ignore-user-config" in command
     assert "--ignore-rules" in command
     assert seen["stdin"] == "review prompt"
+
+
+def test_review_schema_meets_provider_structured_output_contract() -> None:
+    # A valid general JSON Schema can still be rejected before a live review:
+    # the provider requires explicit types, including const/enum-only fields.
+    schema = json.loads((ROOT / "templates/review-result.schema.json").read_text(encoding="utf-8"))
+
+    def check(node: dict) -> None:
+        assert "type" in node
+        if node["type"] == "object":
+            assert node["additionalProperties"] is False
+            assert set(node["required"]) == set(node["properties"])
+            for child in node["properties"].values():
+                check(child)
+        elif node["type"] == "array":
+            check(node["items"])
+
+    check(schema)
+
+
+@pytest.mark.parametrize(("stdout", "stderr", "expected"), [
+    (json.dumps({"type": "turn.failed", "error": {"message": "Invalid response schema"}}),
+     "Startup warning", "Invalid response schema"),
+    ('not JSON\n[]\n' + json.dumps({"type": "error", "message": "Model unavailable"}),
+     "Startup warning", "Model unavailable"),
+    (json.dumps({"type": "error", "message": "Retrying"}) + '\n' +
+     json.dumps({"type": "turn.failed", "error": {"message": "Request failed"}}),
+     "Startup warning", "Request failed"),
+    ('', "warning\n" * 100 + "ERROR: request rejected", ("warning\n" * 100 + "ERROR: request rejected")[-500:]),
+    ('Plain error', '', 'Plain error'),
+    (json.dumps({"type": "turn.failed", "error": []}), 'Final diagnostic', 'Final diagnostic'),
+    (json.dumps({"type": "error", "message": "x" * 2000}), 'Warning', 'x' * 500),
+])
+def test_codex_failure_exposes_actual_error_after_startup_logs(
+    tmp_path: Path, monkeypatch, stdout: str, stderr: str, expected: str
+) -> None:
+    from adapters import codex_cli
+
+    result = FakeRun()
+    result.stdout, result.stderr, result.returncode = stdout, stderr, 1
+    monkeypatch.setattr(codex_cli, "require_binary", lambda _: "codex")
+    monkeypatch.setattr(codex_cli, "run_command", lambda *args, **kwargs: result)
+    with pytest.raises(runner.AdapterError) as error:
+        codex_cli.CodexCLIReviewer().review("review", tmp_path, ROOT / "templates/review-result.schema.json")
+    assert str(error.value) == f"Codex review failed: {expected}"
 
 
 @pytest.mark.skipif(os.name != "posix", reason="runner process-group isolation requires POSIX")
