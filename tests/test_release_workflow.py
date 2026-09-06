@@ -163,6 +163,30 @@ def test_main_change_or_api_failure_during_packaging_prevents_draft(workflow_cas
     assert not any(call[:2] == ["release", "create"] for call in calls)
 
 
+@pytest.mark.parametrize(("env", "exit_code"), [
+    ({"FAKE_GH_MAIN_SHA": "b" * 40}, 2), ({"FAKE_GH_MAIN_EXIT": "7"}, 7),
+])
+def test_main_change_or_api_failure_after_draft_prevents_publication(workflow_case, env, exit_code):
+    directory, run = workflow_case
+    result, _ = run("release.yml", "Publish immutable release", env=env,
+                    context={"steps.release.outputs.latest": "true"})
+    assert result.returncode == exit_code
+    calls = [json.loads(line) for line in (directory / "gh-log").read_text().splitlines()]
+    assert not any(call[:2] == ["release", "edit"] for call in calls)
+
+
+def test_current_main_allows_immutable_publication(workflow_case):
+    directory, run = workflow_case
+    result, _ = run("release.yml", "Publish immutable release",
+                    context={"steps.release.outputs.latest": "true"})
+    assert result.returncode == 0, result.stderr
+    calls = [json.loads(line) for line in (directory / "gh-log").read_text().splitlines()]
+    publish = next(call for call in calls if call[:2] == ["release", "edit"])
+    assert publish[:3] == ["release", "edit", "v1.2.3"]
+    assert "--draft=false" in publish
+    assert "--latest=true" in publish
+
+
 def test_publication_does_not_replace_an_existing_release(workflow_case):
     _, run = workflow_case
     result, _ = run("release.yml", "Ensure release does not already exist")
