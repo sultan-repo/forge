@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- makes skill invocation, bootstrap updates, help mode, and lifecycle-hook limits explicit; links all reference modules from the relevant guidance
+- validates skill identity and invocation settings inside actual frontmatter before replacing an installation
+- keeps status available during execution, revalidates saved correction reviews, and checks reduced cycle limits before dispatching more work
+- stops remaining agent processes before checkpointing and protects runtime writes from escaping through symbolic links or predictable temporary files
+- rejects malformed Plan Delta identities and nonpositive revisions, removes repeated shape checks, and corrects the example's requirement-to-packet mapping
+- scores committed B3 handoffs against the original fixture and records reported model IDs separately from the requested model setting
+- clarifies release publication checks and their non-atomic boundary
+
 ## 1.9.0
 
 Execution, benchmark, installation, release, and live-provider hardening release.

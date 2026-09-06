@@ -128,9 +128,15 @@ def read_json(path: Path) -> dict[str, Any]:
 
 def atomic_json(path: Path, value: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    tmp.replace(path)
+    descriptor, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    tmp = Path(name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(value, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+        tmp.replace(path)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def git_path(root: Path, relative: str) -> Path:
@@ -181,30 +187,40 @@ def execution_lock(root: Path) -> Iterator[None]:
         handle.close()
 
 
+def runtime_path(root: Path, *parts: str) -> Path:
+    base = root.resolve() / RUNTIME_DIR
+    path = base.joinpath(*parts)
+    try:
+        path.resolve().relative_to(base)
+    except (ValueError, OSError, RuntimeError) as exc:
+        raise ForgeRunnerError("Forge runtime paths must stay inside .claude/forge/runtime; inspect symbolic links.") from exc
+    return path
+
+
 def runtime_state_path(root: Path, packet_id: str) -> Path:
     validate_packet_id(packet_id)
-    return root / RUNTIME_DIR / "executions" / f"{packet_id}.json"
+    return runtime_path(root, "executions", f"{packet_id}.json")
 
 
 def review_result_path(root: Path, packet_id: str, cycle: int) -> Path:
     validate_packet_id(packet_id)
-    return root / RUNTIME_DIR / "reviews" / f"{packet_id}-review-{cycle:02d}.json"
+    return runtime_path(root, "reviews", f"{packet_id}-review-{cycle:02d}.json")
 
 
 def handoff_path(root: Path, packet_id: str, cycle: int) -> Path:
     validate_packet_id(packet_id)
-    return root / RUNTIME_DIR / "handoffs" / f"{packet_id}-cycle-{cycle:02d}.json"
+    return runtime_path(root, "handoffs", f"{packet_id}-cycle-{cycle:02d}.json")
 
 
 def deferred_findings_path(root: Path, packet_id: str) -> Path:
     validate_packet_id(packet_id)
-    return root / RUNTIME_DIR / "deferred-findings" / f"{packet_id}.json"
+    return runtime_path(root, "deferred-findings", f"{packet_id}.json")
 
 
 def append_history(root: Path, event: dict[str, Any], enabled: bool = True) -> None:
     if not enabled:
         return
-    path = root / RUNTIME_DIR / "history.jsonl"
+    path = runtime_path(root, "history.jsonl")
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps({"at": utc_now(), **event}, sort_keys=True) + "\n")
@@ -469,7 +485,7 @@ def changed_files(root: Path, base: str, head: str) -> list[str]:
 
 
 def capture_invalid_control(root: Path, packet_id: str, candidate: str) -> Path:
-    path = root / RUNTIME_DIR / "invalid-control" / f"{packet_id}-{utc_now().replace(':', '')}.json.txt"
+    path = runtime_path(root, "invalid-control", f"{packet_id}-{utc_now().replace(':', '')}.json.txt")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(candidate, encoding="utf-8")
     return path
@@ -840,9 +856,24 @@ def control_from_checkout(checkout: Path, control_rel: Path) -> dict[str, Any]:
 
 def latest_completed_review(root: Path, packet_id: str, execution: dict[str, Any]) -> dict[str, Any]:
     number = execution.get("last_completed_review")
-    if not isinstance(number, int) or number < 1:
+    if type(number) is not int or number < 1 or number != execution.get("completed_reviews"):
         raise ForgeRunnerError("Cannot resume correction without a completed review.")
-    return read_json(review_result_path(root, packet_id, number))
+    checkpoint = execution.get("implementation_commit")
+    if not isinstance(checkpoint, str) or not checkpoint:
+        raise ForgeRunnerError("Cannot resume correction without its implementation checkpoint.")
+    review = read_json(review_result_path(root, packet_id, number))
+    validate_review_contract(
+        review,
+        packet_id=packet_id,
+        baseline_revision=execution["baseline_revision"],
+        plan_revision=execution["plan_revision"],
+        packet_base=execution["packet_base_commit"],
+        reviewed_commit=checkpoint,
+        cycle=number,
+    )
+    if review["verdict"] != "CHANGES_REQUIRED":
+        raise ForgeRunnerError("The saved review does not authorize an automatic correction.")
+    return review
 
 
 def write_handoff(
@@ -1009,6 +1040,13 @@ def run_packet(
     while True:
         phase = str(execution["phase"])
         if phase in {"pending", "implementing", "fixing"}:
+            if execution["completed_reviews"] >= max_cycles:
+                execution["phase"] = "escalated"
+                execution["review_status"] = "cycle_limit"
+                execution["reason"] = "The automatic review limit was reached."
+                save_execution_state(root, packet_id, execution)
+                print("The automatic review limit was reached. Your decision is needed.")
+                return 2
             findings: list[dict[str, Any]] | None = None
             if phase == "fixing":
                 previous = latest_completed_review(root, packet_id, execution)
@@ -1026,10 +1064,12 @@ def run_packet(
                 save_execution_state(root, packet_id, execution)
             elif phase == "implementing":
                 correction_review = execution.get("correction_from_review")
-                if isinstance(correction_review, int) and correction_review > 0:
-                    findings = current_findings(
-                        read_json(review_result_path(root, packet_id, correction_review))
-                    )
+                if correction_review is not None:
+                    if type(correction_review) is not int or correction_review != execution.get("last_completed_review"):
+                        raise ForgeRunnerError("The saved correction review identity is invalid.")
+                    findings = current_findings(latest_completed_review(root, packet_id, execution))
+                    if not findings:
+                        raise ForgeRunnerError("Cannot resume correction without current-scope review findings.")
 
             dispatch_state = load_valid_control(root, control_path)
             choose_packet(dispatch_state, packet_id)
@@ -1191,7 +1231,7 @@ def run_packet(
             try:
                 assert_review_target_unchanged(root, reviewed_commit)
             except ForgeRunnerError as exc:
-                stale_path = root / RUNTIME_DIR / "stale-reviews" / f"{packet_id}-review-{cycle:02d}.json"
+                stale_path = runtime_path(root, "stale-reviews", f"{packet_id}-review-{cycle:02d}.json")
                 atomic_json(stale_path, review)
                 execution["phase"] = "escalated"
                 execution["review_status"] = "stale"
@@ -1306,12 +1346,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         root = repo_root(Path.cwd())
         control_path = resolve_control_path(root, args.control)
+        if args.command == "status":
+            return status(root, control_path, args.packet, args.verbose)
         ensure_runtime_excluded(root)
         with execution_lock(root):
             if args.command == "doctor":
                 return doctor(root, control_path, args.verbose)
-            if args.command == "status":
-                return status(root, control_path, args.packet, args.verbose)
             profile = load_profile(root)
             return run_packet(root, control_path, args.packet, profile, args.verbose)
     except (ForgeRunnerError, AdapterError, subprocess.TimeoutExpired) as exc:

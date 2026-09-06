@@ -653,6 +653,9 @@ run_one() {
     [[ "$condition" == forge ]] && prompt="$FORGE_INVOCATION
 $prompt"
     run_agent "$scenario" "$condition" stage1 "$repo" "$cfg1" "$prompt" "$stage1_dir"
+    # Score all Stage-1 changes against the fixture even when the agent committed
+    # its handoff. A clean working tree can still contain valid durable evidence.
+    commit_and_capture "$repo" "$base" "$stage1_dir"
     score_assertion stage1 b3 "$repo" "$stage1_dir/meta-stage.json" "$stage1_dir/transcript.jsonl" "$stage1_dir/run-stage1.json"
     stage1_result="$stage1_dir/run-stage1.json"
     bench_git "$repo" add -A

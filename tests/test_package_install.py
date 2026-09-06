@@ -68,6 +68,69 @@ def test_invalid_candidate_keeps_active_install_intact(package, tmp_path):
     assert not list(skills.glob(".forge-install.*"))
 
 
+@pytest.mark.parametrize("failure", ["wrong_name", "unclosed", "disabled_body_decoy", "duplicate_name", "empty_description"])
+def test_invalid_skill_frontmatter_keeps_active_install_intact(package, tmp_path, failure):
+    skill = package / "SKILL.md"
+    contents = skill.read_text()
+    if failure == "wrong_name":
+        contents = contents.replace("name: forge\n", "name: another-skill\n", 1)
+    elif failure == "unclosed":
+        contents = contents.replace("\n---\n", "\n", 1)
+    elif failure == "disabled_body_decoy":
+        contents = contents.replace("disable-model-invocation: false", "disable-model-invocation: true", 1)
+        contents += "\n<!-- disable-model-invocation: false -->\n"
+    elif failure == "duplicate_name":
+        contents = contents.replace("name: forge\n", "name: forge\nname: another-skill\n", 1)
+    else:
+        contents = "\n".join("description:" if line.startswith("description:") else line for line in contents.split("\n"))
+    skill.write_text(contents)
+    skills = tmp_path / "skills"
+    previous = skills / "forge"
+    previous.mkdir(parents=True)
+    (previous / "previous.txt").write_text("keep the valid installation")
+
+    result = install(package, skills)
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "SKILL INVALID" in result.stderr
+    assert "SKILL.md" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert (previous / "previous.txt").read_text() == "keep the valid installation"
+    assert not list(skills.glob("forge.backup.*"))
+    assert not list(skills.glob(".forge-install.*"))
+
+
+@pytest.mark.parametrize("disabled", ["false", "NO", "off", "0"])
+def test_supported_frontmatter_scalars_and_folded_description(package, disabled):
+    skill = package / "SKILL.md"
+    body = skill.read_text().split("\n---\n", 1)[1]
+    skill.write_text(
+        "---\nname: 'forge' # skill identity\n"
+        "description: >-\n"
+        "  Invoke only when the user explicitly mentions Forge\n"
+        "  to request its use.\n"
+        f"disable-model-invocation: {disabled} # supports natural-language requests\n"
+        "---\n" + body
+    )
+    result = subprocess.run([sys.executable, str(package / "scripts/validate-skill-package.py")], text=True, capture_output=True, check=False)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("description", [
+    '"Forge # invoke only when explicitly requested" # comment',
+    "|-\n  Forge # invoke only when explicitly requested",
+])
+def test_frontmatter_description_preserves_literal_hashes(package, description):
+    skill = package / "SKILL.md"
+    body = skill.read_text().split("\n---\n", 1)[1]
+    skill.write_text(
+        f'---\nname: "forge"\ndescription: {description}\n'
+        "disable-model-invocation: false\n---\n" + body
+    )
+    result = subprocess.run([sys.executable, str(package / "scripts/validate-skill-package.py")], text=True, capture_output=True, check=False)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_install_lock_does_not_remove_another_installer_lock(package, tmp_path):
     skills = tmp_path / "skills"
     skills.mkdir()

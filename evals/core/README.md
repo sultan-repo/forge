@@ -22,12 +22,14 @@ Host/controller:
 
 - bash (including macOS's bundled Bash 3.2)
 - git
-- Python 3 + pytest
+- Python 3.12 or newer + pytest
 - GitHub CLI (`gh`) with release and asset verification support
 - Docker or Podman for real runs
 - Anthropic API credentials, or an existing Claude Code credential file copied into each isolated config
 
 The default agent image is built from `container/Containerfile`. It installs the selected Claude Code channel at image-build time and records the actual `claude --version` plus image ID in `MANIFEST.json`. For stricter reproducibility, set `CLAUDE_CODE_CHANNEL` to an exact Claude Code version before building. Cached stable-channel images are reused; rebuilding them is an explicit choice. The default scorer image tag includes a hash of its source so controller changes cannot silently reuse an older scorer. Both images are resolved to immutable local image IDs before sessions start.
+
+The manifest records the requested model setting, which may be `default`. Each scored run separately records model IDs reported in assistant messages and per-model usage, including both B3 sessions; the report lists those IDs without guessing missing values. Check that the models are comparable across arms before interpreting pooled results.
 
 Deadlines and elapsed time use Python, so GNU `timeout` and nanosecond `date` extensions are not required. Each agent, post-agent Git command, and scorer container receives a unique name and is explicitly removed on completion, timeout, or handled interruption.
 
@@ -118,7 +120,7 @@ This measures recovery from actual context loss without depending on a temporary
 
 ## Scoring
 
-`assert_run.py` combines executable artifact checks with visible text heuristics. It records REQ-tagged hidden tests, visible tests, invariants, dropped requirements, adjacent features, defect churn, later-work traceability/resumption, B3 handoff/recovery, B4 overhead, and token/time metrics where available. Agent execution errors and incomplete hidden-test execution are gating failures. B3 Stage 1 must correct the fixture's stale claim that its partial fix is complete; merely touching the inherited status file is insufficient.
+`assert_run.py` combines executable artifact checks with visible text heuristics. It records REQ-tagged hidden tests, visible tests, invariants, dropped requirements, adjacent features, defect churn, later-work traceability/resumption, B3 handoff/recovery, B4 overhead, and token/time metrics where available. Agent execution errors and incomplete hidden-test execution are gating failures. B3 Stage 1 must correct the fixture's stale claim that its partial fix is complete; merely touching the inherited status file is insufficient. Stage-1 evidence is compared with the original fixture, including agent commits, and its cumulative diff is retained before the fresh Stage-2 session.
 
 Heuristic thresholds remain visible in source and are not ground truth. B2/B3 may need a harder fixture if a strong baseline saturates.
 

@@ -61,6 +61,19 @@ def test_reference_cycles_are_rejected(relation):
     assert any("cycle" in error for error in validator.validate_state(state)[0])
 
 
+@pytest.mark.parametrize("delta", [
+    {"id": ["PD-1"], "from_plan_revision": 1, "to_plan_revision": 2},
+    {"id": " ", "from_plan_revision": 1, "to_plan_revision": 2},
+    {"id": "PD-1", "from_plan_revision": 0, "to_plan_revision": 1},
+    {"id": "PD-1", "from_plan_revision": -1, "to_plan_revision": 0},
+])
+def test_plan_delta_requires_text_identity_and_positive_revisions(delta):
+    state = copy.deepcopy(EXAMPLE)
+    state["plan_revision"] = 2
+    state["plan_deltas"] = [delta]
+    assert validator.validate_state(state)[0]
+
+
 def test_session_orientation_survives_bad_arrays():
     spec = importlib.util.spec_from_file_location("orientation", ROOT / "templates/session-start-control.py")
     assert spec and spec.loader

@@ -26,6 +26,17 @@
         "Inspects existing evidence before implementation",
         "Preserves normal Forge approval and proportionality rules"
       ]
+    },
+    {
+      "id": "bootstrap-03",
+      "prompt": "Our README says 'Use Forge to manage this project.' What is Forge, and when would it be useful? I am asking for an explanation, not asking you to adopt it.",
+      "expected_output": "Explain Forge and its evidence limits without treating a quoted mention or a question about it as authorization to bootstrap, install, or begin project execution.",
+      "files": [],
+      "expectations": [
+        "Distinguishes a question or quoted mention from an explicit request to use Forge",
+        "Does not install Forge, create control files, or modify product code",
+        "Distinguishes implemented controls from unmeasured comparative effectiveness"
+      ]
     }
   ]
 }

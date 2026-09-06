@@ -116,13 +116,15 @@ If Claude appears to ignore instructions, verify what actually loaded before ass
 
 For Control Mode, do not rely on the manually invoked personal skill to be present in every future session.
 
-Create/adapt a tiny unscoped project rule such as `.claude/rules/execution-control.md` from the packaged kernel. Keep it short and project-specific.
+Create/adapt a tiny unscoped project rule such as `.claude/rules/execution-control.md` from the [packaged kernel](../templates/execution-control-kernel.md). Keep it short and project-specific.
 
-When stable control state exists, a project-specific `SessionStart` hook may inject a concise summary on `startup`, `resume`, `clear`, and `compact`. The packaged example reads `.claude/project-control.json`, validates it when a validator is present, and emits only a compact control summary.
+When stable control state exists, a project-specific `SessionStart` hook may inject a concise summary on `startup`, `resume`, `clear`, `compact`, and `fork` where supported. The packaged example reads `.claude/project-control.json`, validates it when a validator is present, and emits only a compact control summary. It is non-blocking: invalid state is reported to the controller, which must reconcile before continuing.
 
 Do not use SessionStart to inject the entire roadmap or skill. Inject only orientation state: baseline/revision, plan revision, active workstreams, blockers/detours, and resume queue.
 
 If the hook or validator fails, do not silently assume control state is valid. Surface the failure and reconcile manually.
+
+See [optional lifecycle hooks](optional-task-hooks.md) for setup and the limits of each guard. Verify current event support against the [Claude Code hooks reference](https://code.claude.com/docs/en/hooks#sessionstart).
 
 ## Controller context budget
 

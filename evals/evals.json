@@ -187,6 +187,17 @@
         "Uses existing implementation authorization for bounded corrections without asking for the same approval again",
         "Reports evidence and remaining uncertainty and distinguishes recommendations that would materially expand scope"
       ]
+    },
+    {
+      "id": 18,
+      "prompt": "Mode help. Explain when I should use new, adopt, continue, review, or status, and show an example. Do not change this repository.",
+      "expected_output": "The skill should explain its modes and an invocation example, distinguish them from the optional shell runner commands, and leave repository state unchanged.",
+      "files": [],
+      "expectations": [
+        "Explains modes without starting requirements discovery, implementation, or installation",
+        "Does not invent shell runner commands such as forge new or forge reconcile",
+        "Respects the explicit request to leave the repository unchanged"
+      ]
     }
   ]
 }

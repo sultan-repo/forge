@@ -15,15 +15,49 @@ from pathlib import Path
 
 root = Path(__file__).resolve().parents[1]
 errors: list[str] = []
-warnings: list[str] = []
 
 
 def err(message: str) -> None:
     errors.append(message)
 
 
-def warn(message: str) -> None:
-    warnings.append(message)
+def validate_skill_frontmatter(text: str) -> None:
+    """Check Forge's required scalar fields inside a delimited frontmatter block."""
+    lines = text.splitlines()
+    if not lines or lines[0] != "---":
+        err("SKILL.md missing YAML frontmatter")
+        return
+    closing = next((index for index, line in enumerate(lines[1:], 1) if line.strip() == "---"), None)
+    if closing is None:
+        err("SKILL.md frontmatter is missing its closing --- delimiter")
+        return
+    header = "\n".join(lines[1:closing])
+
+    def field(name: str) -> str:
+        # Preserve indented continuation lines, including folded descriptions.
+        values = re.findall(rf"(?m)^{re.escape(name)}:[ \t]*(.*(?:\n[ \t]+.*)*)", header)
+        if len(values) != 1:
+            err(f"SKILL.md frontmatter must contain exactly one {name} field")
+            return ""
+        return values[0].strip()
+
+    name = field("name")
+    if not re.fullmatch(r'''(?:forge|'forge'|"forge")(?:[ \t]+\#.*)?''', name):
+        err("SKILL.md frontmatter name must be forge")
+    disabled = field("disable-model-invocation")
+    # Claude Code documents these false field values in any letter case.
+    if not re.fullmatch(r"(?:false|no|off|0)(?:[ \t]+#.*)?", disabled, re.IGNORECASE):
+        err("SKILL.md frontmatter must allow explicit-name model invocation (disable-model-invocation: false)")
+    description = field("description")
+    if description.startswith((">", "|")):
+        description = "\n".join(description.splitlines()[1:])
+    elif description.startswith(("'", '"')):
+        quoted = re.fullmatch(r'''(?:'((?:[^']|'')*)'|"((?:[^"\\]|\\.)*)")[ \t]*(?:\#.*)?''', description, re.DOTALL)
+        description = (quoted.group(1) or quoted.group(2) or "") if quoted else ""
+    else:
+        description = re.sub(r"(?m)(?:^|[ \t]+)#.*$", "", description).strip()
+    if not re.search(r"\bexplicit(?:ly)?\b", description, re.IGNORECASE) or not re.search(r"\bForge\b", description):
+        err("SKILL.md frontmatter description must constrain invocation to an explicit Forge request")
 
 
 skill = root / "SKILL.md"
@@ -37,12 +71,7 @@ else:
         err(f"SKILL.md is {lines} lines; must stay under 500")
     if size > 10_000:
         err(f"SKILL.md is {size} bytes; compact core must stay <= 10000")
-    if not text.startswith("---\n"):
-        err("SKILL.md missing YAML frontmatter")
-    if "disable-model-invocation: false" not in text:
-        err("Forge must allow explicit-name model invocation")
-    if "explicitly mentions Forge" not in text:
-        err("Forge description must constrain automatic invocation")
+    validate_skill_frontmatter(text)
     for target in re.findall(r"\[[^\]]+\]\(([^)]+)\)", text):
         if "://" in target or target.startswith("#"):
             continue
@@ -248,11 +277,9 @@ for launcher in ("forge", "bootstrap.sh", "install.sh"):
     if not os.access(root / "scripts" / launcher, os.X_OK):
         err(f"scripts/{launcher} must be executable")
 
-for warning in warnings:
-    print("SKILL WARNING:", warning, file=sys.stderr)
 if errors:
     for error in errors:
         print("SKILL ERROR:", error, file=sys.stderr)
-    print(f"SKILL INVALID: {len(errors)} error(s), {len(warnings)} warning(s)", file=sys.stderr)
+    print(f"SKILL INVALID: {len(errors)} error(s)", file=sys.stderr)
     sys.exit(2)
-print(f"SKILL VALID: forge {version} ({len(warnings)} warning(s))")
+print(f"SKILL VALID: forge {version}")

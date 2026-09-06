@@ -33,10 +33,26 @@ def require_binary(binary: str) -> str:
     return resolved
 
 
+def stop_agent_processes(process: subprocess.Popen[str]) -> None:
+    """Stop the owned agent group, including children with redirected stdio."""
+    try:
+        if os.name == "posix":
+            os.killpg(process.pid, signal.SIGKILL)
+        elif process.poll() is None:
+            process.kill()
+    except ProcessLookupError:
+        pass
+
+
 def run_command(command: Sequence[str], *, cwd: Path, stdin: str | None = None, timeout_s: int = 3600) -> AgentRun:
     started = time.monotonic()
     process: subprocess.Popen[str] | None = None
     pending_termination: int | None = None
+
+    def raise_interruption(signum: int) -> None:
+        if signum == signal.SIGINT:
+            raise KeyboardInterrupt
+        raise SystemExit(128 + signum)
 
     def terminate(signum: int, _frame: FrameType | None) -> None:
         # Unwind the runner's normal cleanup/lock contexts instead of exiting
@@ -44,11 +60,12 @@ def run_command(command: Sequence[str], *, cwd: Path, stdin: str | None = None, 
         nonlocal pending_termination
         pending_termination = signum
         if process is not None:
-            raise SystemExit(128 + signum)
+            raise_interruption(signum)
 
-    previous_sigterm = None
+    previous_handlers = {}
     if threading.current_thread() is threading.main_thread():
-        previous_sigterm = signal.signal(signal.SIGTERM, terminate)
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            previous_handlers[signum] = signal.signal(signum, terminate)
     try:
         process = subprocess.Popen(
             list(command),
@@ -60,20 +77,17 @@ def run_command(command: Sequence[str], *, cwd: Path, stdin: str | None = None, 
             start_new_session=os.name == "posix",
         )
         if pending_termination is not None:
-            raise SystemExit(128 + pending_termination)
+            raise_interruption(pending_termination)
         stdout, stderr = process.communicate(input=stdin, timeout=timeout_s)
+        # A successful CLI can leave background commands whose redirected stdio
+        # does not keep communicate() open. They must stop before checkpointing.
+        stop_agent_processes(process)
         return AgentRun(list(command), stdout, stderr, process.returncode, time.monotonic() - started)
     except BaseException as exc:
         if process is not None:
             # Agent shells share this process group. Stop them as well as the CLI
             # before any interruption can release the repository lock.
-            try:
-                if os.name == "posix":
-                    os.killpg(process.pid, signal.SIGKILL)
-                else:
-                    process.kill()
-            except ProcessLookupError:
-                pass
+            stop_agent_processes(process)
             process.communicate()
         if isinstance(exc, subprocess.TimeoutExpired):
             raise AdapterError(f"agent command timed out after {timeout_s}s") from exc
@@ -81,5 +95,5 @@ def run_command(command: Sequence[str], *, cwd: Path, stdin: str | None = None, 
             raise AdapterError(f"agent command could not start: {exc}") from exc
         raise
     finally:
-        if previous_sigterm is not None:
-            signal.signal(signal.SIGTERM, previous_sigterm)
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)

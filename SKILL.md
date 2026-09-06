@@ -1,6 +1,6 @@
 ---
 name: forge
-description: Forge is a universal project execution methodology for Claude Code. Invoke only when the user explicitly mentions Forge, asks to use the Forge methodology, imports Forge for the current project, or invokes /forge. Supports new, adopt, continue, review, status, and help modes with objective-first requirements, plan-controlled implementation, context protection, verification, and anti-drift control.
+description: Project execution methodology for Claude Code. Invoke only when the user explicitly mentions Forge to request its use, imports Forge for the project, or invokes /forge. Supports new, adopt, continue, review, status, and help with objective-first requirements, scope control, durable context, and verification.
 argument-hint: "[new|adopt|continue|review|status|help] [scope/request]"
 disable-model-invocation: false
 ---
@@ -8,6 +8,8 @@ disable-model-invocation: false
 # Forge
 
 Modes: `new`, `adopt` (`existing`), `continue` (`resume`), `review`, `status`, `help`. If omitted, infer the safest mode from project evidence.
+
+A mention in quoted material or a question about Forge is not an instruction to start project execution.
 
 ## Non-negotiable rules
 
@@ -18,7 +20,7 @@ Modes: `new`, `adopt` (`existing`), `continue` (`resume`), `review`, `status`, `
 - **Capability-first:** never branch behavior on model names, model generations, fixed platform versions, or assumed tool availability. Detect current capabilities and degrade gracefully.
 - **Simple by default:** keep orchestration, control-state, review, and implementation mechanics internal unless they affect a user decision or the user asks for detail. Ask questions and report progress in concise plain language.
 
-Read [references/trust-and-security.md](references/trust-and-security.md) for trust handling, [references/orchestration.md](references/orchestration.md) for capability routing, and [references/user-interaction.md](references/user-interaction.md) for progressive disclosure and user-facing communication.
+Load references only as needed: [trust and security](references/trust-and-security.md) for trust-sensitive work, [orchestration](references/orchestration.md) for execution routing, and [user interaction](references/user-interaction.md) for communication.
 
 ## Core control loop
 
@@ -37,7 +39,9 @@ Treat the user's first scope as a starting point, not automatically a complete s
 
 For substantial work, keep practical traceability from objective through requirement, design, work, and evidence.
 
-Read [references/requirements.md](references/requirements.md) when requirements need enrichment, conflict resolution, or traceability.
+Read [requirements](references/requirements.md) for enrichment, conflict resolution, or traceability.
+
+For architecture, dependencies, restructuring, or migrations, read [architecture and structure](references/architecture-and-structure.md).
 
 ### Control Mode
 When complexity justifies it, keep compact durable state such as `.claude/project-control.json` plus a concise resume index.
@@ -53,23 +57,23 @@ Classify discoveries before expanding work:
 
 Every child/detour keeps a parent and return path. Accepted material plan changes increment the plan revision. Reconcile stale worker results before integration.
 
-Read [references/scope-and-plan-control.md](references/scope-and-plan-control.md). For a concrete example, read [references/example-walkthrough.md](references/example-walkthrough.md).
+Read [scope and plan control](references/scope-and-plan-control.md) and the [worked example](references/example-walkthrough.md) when establishing Control Mode.
 
 ### Plan Consistency
 Before significant Planned/High-Risk implementation, confirm that approved requirements and invariants are covered, milestones/packets map to scope, acceptance/validation are testable, dependencies/architecture are coherent, approval-required decisions are resolved, and no material requirement is orphaned.
 
 Result: `PASS`, `PASS_WITH_EXPLICIT_GAPS`, or `FAIL`.
 
-Read [references/consistency-and-convergence.md](references/consistency-and-convergence.md).
+Read [consistency and convergence](references/consistency-and-convergence.md) when applying these gates.
 
 ### Context and native capabilities
 Conversation is working memory, not the project database. Persist revisions, active packets/detours, blockers, gates, validation, and resume queue before compaction/handoff; reconstruct from durable state before continuing.
 
 Prefer native planning, task, worker, worktree, lifecycle-hook, verification/review, or collaboration capabilities when they are currently available and useful. Do not require any one of them. When lifecycle hooks exist and Control Mode is justified, prefer session-start reorientation. Task-completion hooks apply only when a task lifecycle actually exists.
 
-When an external execution profile is configured, Forge may route bounded implementation and independent review through supported local agent adapters. The controller owns role separation, checkpoint/revision checking, review cycles, reconciliation, and escalation. External execution is optional and must not weaken single-agent Forge behavior when unavailable.
+With an external execution profile, route bounded implementation and review through supported adapters. The controller owns role separation, checkpoint/revision checks, review cycles, reconciliation, and escalation. External execution is optional; never silently bypass required review.
 
-Read [references/context-and-governance.md](references/context-and-governance.md), [references/orchestration.md](references/orchestration.md), and [references/claude-code-integration.md](references/claude-code-integration.md).
+For persistence or platform integration, read [context and governance](references/context-and-governance.md) and [Claude Code integration](references/claude-code-integration.md).
 
 ### Implementation and review
 For meaningful implementation: orient -> confirm packet -> inspect -> smallest coherent change -> incremental validation -> diff review -> update state -> reconcile.
@@ -84,7 +88,7 @@ Only current-required/current-blocking findings automatically enter current work
 
 Independent reviewers should inspect primary repository evidence rather than relying on implementer self-assessment. Avoid low-value stylistic findings that do not affect correctness, requirements, risk, maintainability, or operations.
 
-Read [references/execution-and-quality.md](references/execution-and-quality.md).
+Read [execution and quality](references/execution-and-quality.md) for detailed validation, debugging, or review guidance.
 
 ### Verification and Convergence
 Check specification compliance before general engineering quality. Prefer deterministic evidence first, independent review when risk warrants it.
@@ -93,11 +97,14 @@ At major closure compare requirements, plan, implementation, and evidence for co
 
 ## Entry flows
 
+Apply only the steps justified by the task. Quick Tasks need inspection, change, and verification without a formal baseline or control files.
+
 - **`new`:** inspect -> objective -> enrich/confirm requirements -> architecture/reuse -> control state if justified -> milestones/packets -> Plan Consistency -> implement if authorized -> reconcile -> Convergence.
 - **`adopt` / `existing`:** inspect actual code/tests/config/schema/CI/deployment/docs/runtime evidence first; separate current from intended behavior; preserve sound conventions; add the minimum Forge control needed.
 - **`continue` / `resume`:** restore revisions, active packets/detours, gates, current code/diff, resume queue, and any in-flight external review phase; reconcile stale state before new work.
-- **`review`:** read [references/full-spectrum-validation.md](references/full-spectrum-validation.md); route findings through normal scope/authority rules.
-- **`status`:** report objective, revisions, gates, active/blocked work, detours/decisions, coverage, validation, risks, and resume queue without unrelated implementation. Default to simple language; expose internal state only on request.
+- **`review`:** read [full-spectrum validation](references/full-spectrum-validation.md); route findings through normal scope/authority rules.
+- **`status`:** report objective, progress, blockers, validation, risks, and next work without implementation. Expose detailed control state only on request.
+- **`help`:** explain modes and show an invocation example; distinguish skill commands from the shell runner. Do not start implementation.
 
 ## Remote bootstrap
 
@@ -107,9 +114,9 @@ Read [BOOTSTRAP.md](BOOTSTRAP.md).
 
 ## Optional local dual-agent runner
 
-Forge includes an optional local runner under `scripts/forge` for projects that explicitly configure external-agent execution. The example profile uses one implementation owner and one independent read-only reviewer, with inherited CLI authentication, immutable Git checkpoints, bounded review cycles, resumable execution state, and concise user-facing output.
+The optional `scripts/forge` runner uses Claude Code implementation and independent read-only Codex review, inherited CLI authentication, Git checkpoints, bounded review cycles, and resumable execution state.
 
-From the project repository, use the installed package’s `scripts/forge doctor` before the first run and `scripts/forge run [WP-ID]` only with a valid active Work Packet. A review pass is tied to a checkpoint; the controller still verifies evidence and reconciles the packet before completion. See [runner setup and recovery](docs/runner.md).
+From a configured project repository, run the installed package's `scripts/forge doctor`, then `scripts/forge run [WP-ID]` with a valid active Work Packet. Review approval covers a checkpoint; the controller must verify evidence and reconcile before completion. See [runner setup and recovery](docs/runner.md).
 
 ## Definition of done
 

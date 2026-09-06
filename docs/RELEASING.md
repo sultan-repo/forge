@@ -21,7 +21,7 @@ The release workflow must not hardcode a specific Forge version or release commi
 
 Require `validation-gate` in the repository's main-branch ruleset. Change detection and static checks must succeed; only inapplicable expensive test jobs may be skipped. Repository rulesets are a maintainer setting, separate from these workflow files.
 
-The validated commit must still be the current main head at eligibility and immediately before draft creation. Delayed completions therefore cannot publish an older version after a newer main commit. A new main push must pass its own validation.
+The validated commit must still be the current main head at eligibility, immediately before draft creation, and immediately before publication. If main advances after draft creation, publication stops and leaves the draft for inspection. These checks reject stale workflow completions; a new main push must pass its own validation. The final API check and publication are separate operations, so they do not provide an atomic lock against a simultaneous main push.
 
 For a failed validation, fix the failure while retaining the intended unpublished `VERSION`; the next successful push validation can release it. For a transient workflow failure, re-run validation on the intended commit. Do not change an already published version's files or assets.
 

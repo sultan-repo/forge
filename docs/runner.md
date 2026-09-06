@@ -79,6 +79,8 @@ CLI permissions still apply after authentication succeeds. If the implementer's 
 
 Checkpoint commits bypass Git hooks. They are review snapshots, not release validation; the implementation and controller must run the applicable project checks explicitly. The runner does not itself sandbox the implementer. The reviewer sandbox is provided by Codex CLI, and a temporary worktree is not by itself a security boundary.
 
+On macOS and Linux, each CLI runs in its own process group. Forge stops processes remaining in that group when the CLI finishes, times out, or the runner receives Ctrl+C or SIGTERM, before checkpointing or releasing the runner lock. Start persistent development servers separately. A process that deliberately detaches into another session is outside this cleanup guarantee.
+
 ## Handoff, review, and completion
 
 These records have different meanings:
@@ -108,6 +110,8 @@ Canonical project truth lives in `.claude/project-control.json` and the document
 
 Runtime files are excluded using Git's local exclude file; they are not automatically shared with a clone or another machine. Preserve the needed evidence before moving the project or deleting a checkout. Export relevant findings into the project's normal durable issue/decision records during reconciliation.
 
+Runtime paths must resolve inside `.claude/forge/runtime/`; symbolic links that redirect records outside that directory are rejected. JSON records are replaced atomically using private, uniquely named temporary files. These checks protect ordinary local operation; runtime files remain editable by the project owner and are not tamper-proof approval records.
+
 For an interruption or temporary CLI failure:
 
 1. Inspect `--verbose status WP-ID`, the actual Git diff, and any reported reason.
@@ -116,9 +120,11 @@ For an interruption or temporary CLI failure:
 
 An interrupted implementation call may run again because the runner cannot prove what an incomplete external process finished. Project tests and migrations must tolerate the intended retry or be reconciled before resuming.
 
+Before resuming a correction, Forge revalidates the saved review's packet, revisions, commits, cycle, verdict, and findings. Missing or mismatched evidence stops execution; preserve it for the controller to inspect. The configured cycle limit also applies on retry: lowering it to the number of reviews already completed stops further implementation.
+
 `escalated` and `reconcile_required` deliberately stop automatic execution. Resolve the stated issue and reconcile the source, requirements, and plan with the controller. For changed scope or a new bounded correction, create a new approved Work Packet and retain the old packet's evidence and disposition. There is currently no shell `reset`, `approve`, `resume`, or `reconcile` command, and editing the execution JSON to manufacture approval is not a recovery procedure.
 
-`status` reports runtime phase without creating execution state. A changed source tree or baseline/plan revision makes a previous approval historical, and `status` returns 2 with the reason. Reconciliation-only changes to the configured control file are allowed when revisions and source remain unchanged; this does not authorize changing requirement meaning without updating its baseline. `status` does not verify business correctness. Exit code 0 from `run` means the current run's review passed, and exit code 2 means it cannot proceed or needs a decision. A successful `status` or `doctor` has its own narrower meaning.
+`status` reports runtime phase without creating execution state or taking the runner's write lock, so it can inspect an active run. It reads the latest saved snapshot; the active phase can advance immediately afterward. A changed source tree or baseline/plan revision makes a previous approval historical, and `status` returns 2 with the reason. Reconciliation-only changes to the configured control file are allowed when revisions and source remain unchanged; this does not authorize changing requirement meaning without updating its baseline. `status` does not verify business correctness. Exit code 0 from `run` means the current run's review passed, and exit code 2 means it cannot proceed or needs a decision. A successful `status` or `doctor` has its own narrower meaning.
 
 ## Validation limits
 
