@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Forge project readiness preflight.
 
 The preflight separates durable project execution preferences from local
@@ -53,7 +52,7 @@ def read_json(path: Path) -> dict[str, Any]:
     except (UnicodeError, json.JSONDecodeError) as exc:
         raise RuntimeError(f"Invalid JSON: {path}") from exc
     if not isinstance(value, dict):
-        raise RuntimeError(f"Expected a JSON object: {path}")
+        raise TypeError(f"Expected a JSON object: {path}")
     return value
 
 
@@ -105,7 +104,7 @@ def validate_project_preferences(value: dict[str, Any]) -> None:
     if value.get("codex_review_policy") not in CODEX_POLICIES:
         raise RuntimeError("Unsupported codex_review_policy in project preferences.")
     if not isinstance(value.get("live_preflight_required"), bool):
-        raise RuntimeError("live_preflight_required must be boolean.")
+        raise TypeError("live_preflight_required must be boolean.")
     if value["execution_mode"] == "claude_only" and value["codex_review_policy"] != "never":
         raise RuntimeError("claude_only execution requires codex_review_policy=never.")
     if value["execution_mode"] == "dual_agent" and value["codex_review_policy"] != "substantial":
@@ -206,8 +205,14 @@ def configure(root: Path) -> int:
     return 0
 
 
-def command_result(command: list[str], cwd: Path, *, stdin: str | None = None, env: dict[str, str] | None = None,
-                   timeout: int = 30) -> subprocess.CompletedProcess[str]:
+def command_result(
+    command: list[str],
+    cwd: Path,
+    *,
+    stdin: str | None = None,
+    env: dict[str, str] | None = None,
+    timeout: int = 30,
+) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(
             command,
@@ -293,7 +298,7 @@ def evaluate(root: Path, *, live: bool) -> tuple[str, dict[str, Any], list[str],
         local = read_json(local_path)
         validate_project_preferences(project)
         validate_local_preferences(local)
-    except RuntimeError as exc:
+    except (RuntimeError, TypeError) as exc:
         blockers.append(str(exc))
         return "BLOCKED", {}, blockers, warnings
 
@@ -337,7 +342,7 @@ def evaluate(root: Path, *, live: bool) -> tuple[str, dict[str, Any], list[str],
     try:
         if (root / REPORT).exists():
             prior = read_json(root / REPORT)
-    except RuntimeError:
+    except (RuntimeError, TypeError):
         prior = None
     live_verified = prior_live_is_reusable(prior, digest, claude_version, codex_version, api_override)
     models: list[str] = []
@@ -347,7 +352,15 @@ def evaluate(root: Path, *, live: bool) -> tuple[str, dict[str, Any], list[str],
         if auth_mode == "subscription":
             env.pop("ANTHROPIC_API_KEY", None)
         claude = command_result(
-            ["claude", "-p", "Reply with exactly FORGE_CLAUDE_READY and nothing else.", "--output-format", "json", "--max-turns", "1"],
+            [
+                "claude",
+                "-p",
+                "Reply with exactly FORGE_CLAUDE_READY and nothing else.",
+                "--output-format",
+                "json",
+                "--max-turns",
+                "1",
+            ],
             root,
             env=env,
             timeout=120,
@@ -461,7 +474,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print_report(status, report, blockers, warnings)
         return {"READY": 0, "READY_WITH_WARNINGS": 1, "BLOCKED": 2}[status]
-    except (RuntimeError, OSError) as exc:
+    except (RuntimeError, TypeError, OSError) as exc:
         print(f"BLOCKED: {exc}", file=sys.stderr)
         return 2
 
