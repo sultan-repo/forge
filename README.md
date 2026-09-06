@@ -139,6 +139,8 @@ This is **optional**. You do not need Codex, Docker, or the local runner for nor
 
 The runner is intended for projects already using Forge's durable project-control mode. It uses your locally authenticated Claude Code and Codex CLIs, creates Git checkpoints, and keeps review tied to the exact implementation checkpoint.
 
+For reviewer quality, Forge does not pin a Codex model name. It uses the model selected by the current Codex CLI/provider and explicitly requests **high reasoning effort** for each independent review. If the active Codex setup cannot honor that request, the review fails instead of silently dropping to a lower effort.
+
 A real disposable-project smoke test has successfully exercised the Claude Code -> Codex review path. That proves one observed integration path, not a universal provider/version compatibility guarantee.
 
 If you use Claude Pro or Max, note that an exported `ANTHROPIC_API_KEY` can override subscription authentication for non-interactive Claude Code. See the [runner setup and recovery guide](docs/runner.md) for authentication, CLI compatibility, permissions, recovery, and commands.
