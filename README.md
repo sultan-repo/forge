@@ -21,6 +21,45 @@ Use Forge from https://github.com/sultan-repo/forge to build:
 
 Claude Code follows Forge's [bootstrap instructions](BOOTSTRAP.md) to select and load the latest published stable release, then chooses how much structure the project needs. First-time loading requires repository access. Small tasks should stay small; larger projects can use stronger project-control features.
 
+## Project preflight
+
+For a substantial project, Forge now verifies how you want it to work **before implementation starts** instead of assuming your agent setup is ready.
+
+On first setup Forge can ask a short set of project questions:
+
+- Claude only, Claude + Codex, or adaptive execution
+- whether the current Claude Code model selection is acceptable
+- when Codex should independently review work
+- whether this machine should use a Claude subscription login, API-key billing, or inherited authentication
+- whether a small live readiness probe is required before substantial work
+
+Project execution preferences are stored under:
+
+```text
+.claude/forge/project-preferences.json
+```
+
+Machine-local authentication/readiness evidence stays under `.claude/forge/runtime/` and should not be committed.
+
+The optional shell helper provides the same readiness check:
+
+```bash
+scripts/forge preflight --configure
+scripts/forge preflight --live
+```
+
+Preflight reports one of:
+
+```text
+READY
+READY_WITH_WARNINGS
+BLOCKED
+```
+
+If your project requires Codex review, Forge verifies Codex before significant implementation and does not silently fall back to Claude-only execution. If Claude subscription use is selected, an active `ANTHROPIC_API_KEY` override is treated as a blocker rather than being discovered halfway through the project.
+
+Quick low-risk tasks can still stay lightweight and do not need persistent preflight unless they actually depend on an external agent.
+
 ## What Forge does
 
 Forge helps Claude Code with four things:
@@ -61,11 +100,12 @@ For small tasks, it may add no persistent project-control files at all. For larg
 
 ```text
 .claude/
-├── project-control.json    # optional durable project state
-└── hooks/ or control/      # optional helpers when useful
+├── project-control.json
+└── forge/
+    └── project-preferences.json
 ```
 
-That state can keep track of requirements, milestones, active work, revisions, blockers, validation status, and where to resume next.
+That state can keep track of requirements, milestones, active work, revisions, blockers, execution preferences, validation status, and where to resume next.
 
 Forge should add only the control surface justified by the project.
 
@@ -74,6 +114,7 @@ Forge should add only the control surface justified by the project.
 After Forge is installed, you can use natural language or the skill commands below.
 
 ```text
+/forge preflight
 /forge new [scope]
 /forge adopt [scope]       # existing project
 /forge continue            # resume
@@ -82,7 +123,7 @@ After Forge is installed, you can use natural language or the skill commands bel
 /forge help
 ```
 
-These commands run inside Claude Code. `/forge status` summarizes the project; the optional shell runner's `status` checks one packet's execution and review state. The shell runner has `doctor`, `run`, and `status` commands, with `--help` for usage. See the [runner guide](docs/runner.md).
+These commands run inside Claude Code. `/forge preflight` establishes or checks project readiness; `/forge status` summarizes the project. The optional shell runner provides `preflight`, `doctor`, `run`, and `status`; see the [runner guide](docs/runner.md).
 
 Natural language works too:
 
@@ -143,7 +184,7 @@ For reviewer quality, Forge does not pin a Codex model name. It uses the model s
 
 A real disposable-project smoke test has successfully exercised the Claude Code -> Codex review path. That proves one observed integration path, not a universal provider/version compatibility guarantee.
 
-If you use Claude Pro or Max, note that an exported `ANTHROPIC_API_KEY` can override subscription authentication for non-interactive Claude Code. See the [runner setup and recovery guide](docs/runner.md) for authentication, CLI compatibility, permissions, recovery, and commands.
+If you use Claude Pro or Max, note that an exported `ANTHROPIC_API_KEY` can override subscription authentication for non-interactive Claude Code. Project preflight detects that mismatch when subscription use is selected. See the [runner setup and recovery guide](docs/runner.md) for authentication, CLI compatibility, permissions, recovery, and commands.
 
 ## Evidence
 
@@ -164,7 +205,7 @@ See [Evaluation](evals/README.md) for the benchmark design and evidence rules.
 
 Forge is not a guarantee that every requirement is complete, every agent decision is correct, or every finished product meets its business goal.
 
-It is a project-control method and set of optional helpers that make important scope, state, review, and completion checks more explicit and durable.
+It is a project-control method and set of optional helpers that make important scope, state, review, readiness, and completion checks more explicit and durable.
 
 Forge does not prescribe a fixed framework, mandatory folder tree, fixed agent roster, or universal TDD process.
 
