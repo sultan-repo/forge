@@ -9,6 +9,27 @@ from typing import Any, cast
 from .base import AdapterError, AgentRun, require_binary, run_command
 
 
+def failure_detail(result: AgentRun) -> str:
+    """Keep the terminal failure instead of truncating at startup diagnostics."""
+    for line in reversed(result.stdout.splitlines()):
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        if event.get("type") == "turn.failed":
+            error = event.get("error")
+            message = error.get("message") if isinstance(error, dict) else None
+        elif event.get("type") == "error":
+            message = event.get("message")
+        else:
+            continue
+        if isinstance(message, str) and message.strip():
+            return message.strip()[:500]
+    return (result.stderr.strip() or result.stdout.strip() or f"exit status {result.returncode}")[-500:]
+
+
 class CodexCLIReviewer:
     name = "codex-cli"
 
@@ -41,6 +62,7 @@ class CodexCLIReviewer:
                     "--ask-for-approval",
                     "never",
                     "exec",
+                    "--json",
                     "--cd",
                     str(cwd),
                     "--sandbox",
@@ -61,8 +83,7 @@ class CodexCLIReviewer:
                 timeout_s=self.timeout_s,
             )
             if result.returncode != 0:
-                detail = (result.stderr or result.stdout).strip()
-                raise AdapterError(f"Codex review failed: {detail[:500]}")
+                raise AdapterError(f"Codex review failed: {failure_detail(result)}")
             try:
                 payload = json.loads(output_path.read_text(encoding="utf-8"))
             except (OSError, UnicodeError, json.JSONDecodeError) as exc:

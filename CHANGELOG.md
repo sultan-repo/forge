@@ -4,6 +4,8 @@
 
 Repository validation and workflow hardening.
 
+- fixes explicit field types required by the live Codex structured-output API and surfaces terminal reviewer errors instead of truncating at startup warnings
+- documents Claude subscription/API-key precedence and CLI compatibility troubleshooting
 - rejects stale source/plan approvals, malformed recovery state, and mismatched review evidence; preserves partial work and restores invalid control JSON after adapter failures
 - stops agent subprocess groups on timeout or interruption and honors profile verbosity settings
 - validates malformed project-control data without tracebacks and rejects cyclic work-packet references
