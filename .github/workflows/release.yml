@@ -162,7 +162,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.release.outputs.tag }}
           LATEST: ${{ steps.release.outputs.latest }}
-        run: gh release edit "$TAG" --repo "${{ github.repository }}" --draft=false --latest="$LATEST"
+        run: |
+          set -euo pipefail
+          current_main="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+          if [[ "$current_main" != "$RELEASE_SHA" ]]; then
+            echo "Main advanced after draft creation; refusing to publish a stale release." >&2
+            exit 2
+          fi
+          gh release edit "$TAG" --repo "${{ github.repository }}" --draft=false --latest="$LATEST"
 
       - name: Verify published release and asset
         env:
