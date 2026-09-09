@@ -1,10 +1,14 @@
 # Execution, Verification, Review, and Safety Reference
 
-Load this reference for implementation, debugging, validation design, high-risk changes, independent review, or completion gates.
+Load for nontrivial debugging, validation design, high-risk changes, independent review, or completion gates. A Quick Task with a direct check can use the entry instructions alone.
 
 ## Verification-first
 
 Every meaningful change should have an observable way to determine whether it works.
+
+For each affected requirement or invariant claimed verified, name the check and result. Check the relevant entry points: testing a data reader does not verify its writer. Evidence may be a focused test, direct observation, or justified static check; do not create ceremonial tests for facts those mechanisms already establish. A green suite establishes only its actual coverage.
+
+Use verified, failed, or unverified accurately. An accepted limitation remains a limitation; recording it neither satisfies the requirement nor permits an unqualified completion claim. Compare the starting state before attributing a defect to this change. Handle an in-scope defect to acceptance, and report material out-of-scope defects without silently expanding work.
 
 Select evidence by change:
 - unit/integration/contract/end-to-end/regression tests

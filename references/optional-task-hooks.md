@@ -33,9 +33,13 @@ Do not make Forge correctness depend on a task system being present.
 
 The packaged [task-completion hook](../templates/task-completed-control.py) is intentionally conservative: it acts only when the task subject/description explicitly references a Forge Work Packet using a `WP-...` identifier. It checks recorded acceptance, validation, reconciliation, and any required runner review; it does not run project tests or prove those records are true.
 
+Every referenced packet is checked, including its current revisions. A task naming several packets cannot complete merely because the first one is ready. Explicit contradictory completion fields fail validation; older records lacking evidence fields produce warnings that remain visible during orientation.
+
 ## Installing the examples
 
 After reviewing the helpers, copy only the applicable hook scripts and [control validator](../templates/validate-project-control.py) into the project's `.claude/hooks/` directory. The examples read `.claude/project-control.json`; adapt their paths if your project uses another location.
+
+The hooks use `CLAUDE_PROJECT_DIR` when supplied by the host and otherwise locate the project from the event's working directory. Validator subprocesses are bounded to five seconds. A failed/timed-out validator is reported during SessionStart and blocks an applicable TaskCompleted transition; it does not invoke a model or run the product test suite.
 
 Merge the applicable entries from [the settings example](../templates/settings-control-hooks.example.json) into `.claude/settings.json`, preserving existing settings and hooks. Omit `TaskCompleted` when the project does not use the native task lifecycle. Without the validator beside the hooks, full control-state validation is skipped.
 

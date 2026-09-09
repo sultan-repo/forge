@@ -20,6 +20,8 @@ Maintain authoritative information proportional to complexity:
 
 Avoid duplicate sources of truth.
 
+Choose one existing status/plan/native-task surface first. Do not create every artifact listed above. Add structured control only when its dependencies or automation are useful, and reference canonical requirements/evidence rather than copying them. Update material changes and handoffs, not every tool call. Leave valid existing state in place even when it is more detailed than a new task needs.
+
 ## Resume index
 
 Keep one concise place that answers:
@@ -94,7 +96,7 @@ After compaction/resume:
 8. reconcile coverage and return_to
 9. confirm resume queue
 
-Do not continue from compacted summary alone.
+Do not continue from compacted summary alone. Read the active slice and follow evidence pointers; do not reload every historical decision or repeat checks whose source and relevant conditions have not changed. If status says "fixed" but the diff/test evidence disagrees, retain the discrepancy and establish actual behavior before choosing whether to resume implementation or verification.
 
 For substantially unrelated work, persist state then prefer `/clear` or a fresh session.
 
@@ -116,7 +118,7 @@ If Claude appears to ignore instructions, verify what actually loaded before ass
 
 For Control Mode, do not rely on the manually invoked personal skill to be present in every future session.
 
-Create/adapt a tiny unscoped project rule such as `.claude/rules/execution-control.md` from the [packaged kernel](../templates/execution-control-kernel.md). Keep it short and project-specific.
+When future sessions need automatic orientation, reuse the existing project instructions or add a tiny project rule from the [packaged kernel](../templates/execution-control-kernel.md). Keep it short and project-specific. Do not add a rule and hooks simply because Control Mode exists.
 
 When stable control state exists, a project-specific `SessionStart` hook may inject a concise summary on `startup`, `resume`, `clear`, `compact`, and `fork` where supported. The packaged example reads `.claude/project-control.json`, validates it when a validator is present, and emits only a compact control summary. It is non-blocking: invalid state is reported to the controller, which must reconcile before continuing.
 

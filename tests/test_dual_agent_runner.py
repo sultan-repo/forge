@@ -799,7 +799,8 @@ def test_handoff_contract_and_custom_control_path(tmp_path: Path, monkeypatch) -
     git(repo, "commit", "-qm", "custom control")
 
     def implement(cwd: Path, prompt: str, call: int) -> None:
-        assert ".claude/custom-state.json before editing" in prompt
+        assert ".claude/custom-state.json" in prompt
+        assert ".claude/project-control.json" not in prompt
         (cwd / "app.txt").write_text("implemented\n", encoding="utf-8")
 
     def inspect_handoff(checkout: Path, prompt: str, call: int) -> None:
@@ -1169,3 +1170,47 @@ def test_task_guard_requires_completed_review(tmp_path: Path) -> None:
     )
     allowed = subprocess.run([sys.executable, str(hook)], input=event, text=True, capture_output=True, check=False)
     assert allowed.returncode == 0
+
+
+@pytest.mark.parametrize("report", [
+    {"status": "BLOCKED", "blockers": ["Subscription API override"]},
+    {"status": "BLOCKED", "blockers": ["Project policy requires a live probe"]},
+    {"status": "READY"},
+    [],
+])
+def test_saved_external_preferences_block_dispatch_on_failed_check(tmp_path: Path, monkeypatch, report) -> None:
+    repo, _ = init_repo(tmp_path)
+    preferences = repo / ".claude/forge/project-preferences.json"
+    preferences.parent.mkdir(parents=True, exist_ok=True)
+    preferences.write_text("{}", encoding="utf-8")
+    seen = []
+    def fake(command, cwd, **kwargs):
+        seen.append(command)
+        return subprocess.CompletedProcess(command, 2, json.dumps(report), "")
+    monkeypatch.setattr(runner, "run_local", fake)
+    with pytest.raises(runner.ForgeRunnerError, match="preferences block"):
+        runner.enforce_saved_execution_preferences(repo)
+    assert "--review" in seen[0]
+    assert "--live" not in seen[0]
+
+
+def test_no_saved_preferences_do_not_add_another_preflight(tmp_path: Path, monkeypatch) -> None:
+    repo, _ = init_repo(tmp_path)
+    def unexpected(*args, **kwargs):
+        raise AssertionError("no extra CLI calls should be necessary")
+    monkeypatch.setattr(runner, "run_local", unexpected)
+    runner.enforce_saved_execution_preferences(repo)
+
+
+def test_saved_external_preferences_allow_ready_with_auth_warning(tmp_path: Path, monkeypatch, capsys) -> None:
+    repo, _ = init_repo(tmp_path)
+    preferences = repo / ".claude/forge/project-preferences.json"
+    preferences.parent.mkdir(parents=True, exist_ok=True)
+    preferences.write_text("{}", encoding="utf-8")
+    def fake(command, cwd, **kwargs):
+        return subprocess.CompletedProcess(command, 1, json.dumps({
+            "status": "READY_WITH_WARNINGS", "warnings": ["Inherited API authentication"],
+        }), "")
+    monkeypatch.setattr(runner, "run_local", fake)
+    runner.enforce_saved_execution_preferences(repo)
+    assert "Inherited API authentication" in capsys.readouterr().out

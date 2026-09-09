@@ -2,6 +2,6 @@
   "version": 1,
   "execution_mode": "adaptive",
   "claude_model_policy": "current_cli",
-  "codex_review_policy": "high_risk",
-  "live_preflight_required": true
+  "codex_review_policy": "explicit",
+  "live_preflight_required": false
 }

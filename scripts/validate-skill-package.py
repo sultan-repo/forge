@@ -35,7 +35,7 @@ def validate_skill_frontmatter(text: str) -> None:
 
     def field(name: str) -> str:
         # Preserve indented continuation lines, including folded descriptions.
-        values = re.findall(rf"(?m)^{re.escape(name)}:[ \t]*(.*(?:\n[ \t]+.*)*)", header)
+        values: list[str] = re.findall(rf"(?m)^{re.escape(name)}:[ \t]*(.*(?:\n[ \t]+.*)*)", header)
         if len(values) != 1:
             err(f"SKILL.md frontmatter must contain exactly one {name} field")
             return ""
@@ -140,7 +140,7 @@ for filename, fields in (
             if key not in item:
                 err(f"{label} missing {key}")
         identifier = item.get("id")
-        if type(identifier) not in (str, int) or identifier == "":
+        if not isinstance(identifier, (str, int)) or isinstance(identifier, bool) or identifier == "":
             err(f"{label} id must be a nonempty string or integer")
         elif identifier in ids:
             err(f"{label} duplicate id {identifier}")
@@ -173,6 +173,7 @@ required = [
     "scripts/install.sh",
     "scripts/forge",
     "scripts/forge-run.py",
+    "scripts/forge-preflight.py",
     "scripts/adapters/__init__.py",
     "scripts/adapters/base.py",
     "scripts/adapters/claude_code.py",
@@ -207,10 +208,13 @@ required = [
     "references/claude-code-integration.md",
     "references/optional-task-hooks.md",
     "references/user-interaction.md",
+    "references/project-preflight.md",
     "templates/execution-control-kernel.md",
     "templates/project-control.schema.json",
     "templates/execution-profile.example.json",
     "templates/execution-profile.schema.json",
+    "templates/project-preferences.example.json",
+    "templates/project-preferences.schema.json",
     "templates/implementation-handoff.schema.json",
     "templates/review-result.schema.json",
     "templates/session-start-control.py",
@@ -234,6 +238,17 @@ if profile_path.exists():
         runner["validate_profile"](profile)
     except (OSError, ValueError, TypeError, RuntimeError, ImportError) as exc:
         err(f"execution profile example is invalid: {exc}")
+
+preferences_path = root / "templates" / "project-preferences.example.json"
+if preferences_path.exists():
+    try:
+        preferences = json.loads(preferences_path.read_text(encoding="utf-8"))
+        if not isinstance(preferences, dict):
+            raise TypeError("project preferences must be an object")
+        preflight = runpy.run_path(str(root / "scripts" / "forge-preflight.py"))
+        preflight["validate_project_preferences"](preferences)
+    except (OSError, ValueError, TypeError, RuntimeError, ImportError) as exc:
+        err(f"project preferences example is invalid: {exc}")
 
 bundle_path = root / "evals" / "core" / "fixture_bundle.json.gz.b64"
 if bundle_path.exists():

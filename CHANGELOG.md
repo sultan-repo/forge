@@ -2,16 +2,24 @@
 
 ## Unreleased
 
-## 1.11.0
+Adaptive execution and end-to-end reliability revision:
 
-Project readiness and preflight release.
+- routes bounded tasks directly, loading planned/risk guidance only when relevant; reuses existing authority and project state
+- makes external-agent preflight optional for current-session work, local by default, task-specific, and faithful to saved authentication/review requirements
+- ties completion claims to actual checks and distinguishes unverified work, accepted gaps, and pre-existing defects
+- hardens resume/completion hooks and state validation while keeping legacy evidence gaps visible and readable
+- validates installations before replacement, including the preflight package files
+- revises the public benchmark's automatic criteria and evidence accounting; deterministic results do not establish model effectiveness
+- expands behavioral cases and CI coverage for instruction and evaluation changes
 
-- adds `/forge preflight` as a first-class readiness flow before Planned, High-Risk, and multi-milestone implementation
+Project readiness/preflight additions (not yet released):
+
+- adds `/forge preflight` as an optional readiness flow for requested external-agent execution
 - adds `scripts/forge preflight --configure` for a short project setup covering execution mode, current Claude model acceptance, Codex review policy, local Claude authentication intent, and live-readiness preference
 - adds `scripts/forge preflight --live` for minimal no-edit Claude and Codex provider probes with READY / READY_WITH_WARNINGS / BLOCKED outcomes
 - stores durable project execution preferences separately from machine-local authentication/readiness evidence and never persists secret values
 - blocks subscription-configured projects when `ANTHROPIC_API_KEY` would override the intended Claude login, and blocks API-configured projects when the required key is absent
-- verifies configured Codex availability/sign-in and a real read-only ephemeral review probe with high reasoning before substantial work; required Codex review never silently degrades to Claude-only execution
+- checks Codex availability/sign-in for the requested review route; optional live probes use read-only ephemeral execution with high reasoning, and required review never silently degrades to Claude-only execution
 - reuses prior live-readiness evidence only while project preferences, relevant CLI versions, and API-key override state remain unchanged
 - keeps Quick Tasks proportional by allowing preflight to stay lightweight when no external-agent dependency exists
 - adds project-preference schema/example, focused preflight guidance, README/runner documentation, and regression coverage for auth conflicts, Codex readiness, high-reasoning probes, model reporting, and readiness reuse

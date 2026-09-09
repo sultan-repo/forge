@@ -22,6 +22,7 @@ REQ_DISPOSITIONS = {"deferred", "rejected", "superseded"}
 ITEM_DISPOSITIONS = {"deferred", "cancelled", "superseded"}
 GATE_STATUSES = {"pending", "passed", "passed_with_explicit_gaps", "failed", "invalidated"}
 ACTIVE_ITEM_STATUSES = {"in_progress", "blocked"}
+COMPLETED_STATUSES = {"passed", "satisfied", "accepted", "complete", "completed"}
 
 
 def add_disposition_errors(obj: Requirement, label: str, errors: list[str]) -> None:
@@ -95,6 +96,12 @@ def shape_errors(state: ControlState) -> list[str]:
                 list_keys += ("dependencies",)
                 for key in ("baseline_revision", "plan_revision"):
                     revision(item.get(key), f"{label}.{key}")
+                if "execution" in item:
+                    execution = item["execution"]
+                    if not isinstance(execution, dict):
+                        errors.append(f"{label}.execution must be an object")
+                    elif "review_required" in execution and type(execution["review_required"]) is not bool:
+                        errors.append(f"{label}.execution.review_required must be boolean")
             for key in list_keys:
                 strings(item.get(key, []), f"{label}.{key}")
             reference_keys: tuple[str, ...] = ("milestone",) if group == "requirements" else ()
@@ -161,6 +168,15 @@ def validate_state(state: ControlState) -> tuple[list[str], list[str]]:
             errors.append(f"requirement {requirement_id}: invalid status {status!r}")
         if status in REQ_DISPOSITIONS:
             add_disposition_errors(requirement_value, f"requirement {requirement_id}", errors)
+        if status == "satisfied":
+            evidence = requirement_value.get("evidence")
+            if not isinstance(evidence, list) or not evidence or any(
+                not isinstance(item, (str, dict)) or not item or (isinstance(item, str) and not item.strip())
+                for item in evidence
+            ):
+                warnings.append(
+                    f"requirement {requirement_id}: satisfied without named evidence; verify the claim before relying on it"
+                )
 
         milestone = requirement_value.get("milestone")
         if milestone is not None and milestone not in milestones:
@@ -209,6 +225,16 @@ def validate_state(state: ControlState) -> tuple[list[str], list[str]]:
             errors.append(f"work packet {packet_id}: invalid status {status!r}")
         if status in ITEM_DISPOSITIONS:
             add_disposition_errors(packet_value, f"work packet {packet_id}", errors)
+        if status == "done":
+            # Old v3 records may omit these fields. Keep them readable while
+            # rejecting explicit contradictions rather than certifying completion.
+            for key in ("acceptance_status", "validation_status", "reconciled"):
+                if key not in packet_value:
+                    warnings.append(f"work packet {packet_id}: done without {key}; verify before relying on completion")
+                elif (key == "reconciled" and packet_value[key] is not True) or (
+                    key != "reconciled" and str(packet_value[key]).lower() not in COMPLETED_STATUSES
+                ):
+                    errors.append(f"work packet {packet_id}: done contradicts {key}={packet_value[key]!r}")
 
         parent = packet_value.get("parent")
         if parent not in milestones and parent not in work_packets:
@@ -228,6 +254,12 @@ def validate_state(state: ControlState) -> tuple[list[str], list[str]]:
 
         baseline_revision = packet_value.get("baseline_revision")
         plan_revision = packet_value.get("plan_revision")
+        for key, revision, current in (
+            ("baseline_revision", baseline_revision, current_baseline),
+            ("plan_revision", plan_revision, current_plan),
+        ):
+            if revision > current:
+                errors.append(f"work packet {packet_id}: {key} exceeds the current project revision")
         if not isinstance(baseline_revision, int) or baseline_revision < 1:
             errors.append(f"work packet {packet_id}: baseline_revision must be >=1")
         if not isinstance(plan_revision, int) or plan_revision < 1:

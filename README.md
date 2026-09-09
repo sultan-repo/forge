@@ -21,51 +21,40 @@ Use Forge from https://github.com/sultan-repo/forge to build:
 
 Claude Code follows Forge's [bootstrap instructions](BOOTSTRAP.md) to select and load the latest published stable release, then chooses how much structure the project needs. First-time loading requires repository access. Small tasks should stay small; larger projects can use stronger project-control features.
 
-## Project preflight
+## Choose only the structure the work needs
 
-For a substantial project, Forge now verifies how you want it to work **before implementation starts** instead of assuming your agent setup is ready.
+Forge starts with the current task:
 
-On first setup Forge can ask a short set of project questions:
+| Work | Behavior |
+|---|---|
+| A bounded change with a direct check | Inspect, edit, verify, finish; no setup interview or new control files |
+| Dependent work or a project spanning sessions | Reuse the existing plan/status; preserve requirements, evidence, blockers, and the next action |
+| A consequential security, data, production, or compatibility change | Add safeguards and required authority/review before the affected action |
 
-- Claude only, Claude + Codex, or adaptive execution
-- whether the current Claude Code model selection is acceptable
-- when Codex should independently review work
-- whether this machine should use a Claude subscription login, API-key billing, or inherited authentication
-- whether a small live readiness probe is required before substantial work
+The entry instructions load planning and risk guidance only when applicable. Existing project rules and required review still apply. A text correction does not automatically require a revision bump or a decision document.
 
-Project execution preferences are stored under:
+## Optional external-agent readiness
 
-```text
-.claude/forge/project-preferences.json
-```
+Normal Forge work uses the current agent and tools. It does not require a second CLI, a persistent setup questionnaire, or a live provider probe.
 
-Machine-local authentication/readiness evidence stays under `.claude/forge/runtime/` and should not be committed.
-
-The optional shell helper provides the same readiness check:
+When you request external execution or the project requires an independent agent, the optional preflight helper checks that route:
 
 ```bash
-scripts/forge preflight --configure
-scripts/forge preflight --live
+scripts/forge preflight
+scripts/forge preflight --configure  # optional saved preferences
+scripts/forge preflight --live       # explicit provider calls; consumes usage
 ```
 
-Preflight reports one of:
+Preflight reports `READY`, `READY_WITH_WARNINGS`, or `BLOCKED`. Local checks do not prove a live provider call will succeed. Required review is never silently dropped. Subscription-configured external execution rejects an active `ANTHROPIC_API_KEY` override rather than changing billing routes.
 
-```text
-READY
-READY_WITH_WARNINGS
-BLOCKED
-```
-
-If your project requires Codex review, Forge verifies Codex before significant implementation and does not silently fall back to Claude-only execution. If Claude subscription use is selected, an active `ANTHROPIC_API_KEY` override is treated as a blocker rather than being discovered halfway through the project.
-
-Quick low-risk tasks can still stay lightweight and do not need persistent preflight unless they actually depend on an external agent.
+Optional project preferences live in `.claude/forge/project-preferences.json`. Machine-local readiness/authentication choices stay under `.claude/forge/runtime/`; secret values are never persisted. See [preflight behavior and task routing](references/project-preflight.md).
 
 ## What Forge does
 
 Forge helps Claude Code with four things:
 
 1. **Clarify what you are building**  
-   It challenges missing requirements, weak assumptions, contradictions, and important edge cases before significant implementation.
+   It resolves material requirement gaps and contradictions using project evidence, and asks only for decisions that block the requested work.
 
 2. **Keep the project on track**  
    Approved features and decisions stay connected to the project objective even during debugging, research, long sessions, or parallel work.
@@ -90,7 +79,7 @@ Use Forge when your project:
 - needs reliable handoff or context recovery
 - needs completion checked against the original project objective, not only the current task
 
-For a tiny reversible change, Forge should stay lightweight.
+For a tiny reversible change, the direct path needs no planning references. Additional agents and checks still have a cost; they should answer a distinct question or satisfy a required safeguard.
 
 ## What Forge may add to your project
 
@@ -105,7 +94,7 @@ For small tasks, it may add no persistent project-control files at all. For larg
     └── project-preferences.json
 ```
 
-That state can keep track of requirements, milestones, active work, revisions, blockers, execution preferences, validation status, and where to resume next.
+Reuse an existing status/plan first. Structured state can keep track of requirements, milestones, active work, revisions, blockers, validation evidence, and where to resume next when dependencies or automation justify it.
 
 Forge should add only the control surface justified by the project.
 
@@ -197,7 +186,7 @@ Forge includes automated regression tests and an executable A/B benchmark design
 
 The implementation, benchmark harness, release controls, and one real Claude Code -> Codex integration path have been tested.
 
-**Real with-Forge vs without-Forge performance results have not yet been published.** Mock and deterministic tests validate the implementation and measuring instrument; they do not prove comparative effectiveness.
+**Comparative effectiveness remains an empirical question.** Deterministic tests validate specific contracts and failure paths; they do not prove that Forge improves model behavior or offsets its overhead. A smaller instruction entrypoint reduces the text loaded by default, but is not proof of lower end-to-end tokens or latency. Fresh comparisons must use the same task contracts, complete evidence, and separately reported correctness, scope, state, and efficiency.
 
 See [Evaluation](evals/README.md) for the benchmark design and evidence rules.
 
@@ -214,6 +203,7 @@ A one-line low-risk change should still feel like a one-line low-risk change.
 ## Learn more
 
 - [How Forge works](SKILL.md)
+- [End-to-end assessment and revision](docs/ASSESSMENT.md)
 - [Worked example](references/example-walkthrough.md)
 - [Scope and plan control](references/scope-and-plan-control.md)
 - [Claude Code integration](references/claude-code-integration.md)
