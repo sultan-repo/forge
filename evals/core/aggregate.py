@@ -9,6 +9,8 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+from assert_run import CRITERIA_VERSION
+
 NAMES = {"b1": "B1 Scope retention", "b2": "B2 Debug tunnel", "b3": "B3 Context-loss recovery", "b4": "B4 Proportionality"}
 COND = {"baseline": "Baseline", "forge": "Forge"}
 
@@ -49,6 +51,17 @@ def main(out_dir: str):
     if not runs:
         raise SystemExit("no final run.json files found; there are no results to aggregate")
     manifest = json.loads((root / "MANIFEST.json").read_text()) if (root / "MANIFEST.json").exists() else {}
+    versions = {run.get("criteria_version") for run in runs}
+    if versions != {CRITERIA_VERSION} or manifest.get("criteria_version") != CRITERIA_VERSION:
+        raise SystemExit("criteria versions are missing, mixed, or incompatible; use the scorer/report revision that produced these results")
+    identities = [(run["scenario"], run["condition"], run["run"]) for run in runs]
+    if len(set(identities)) != len(identities):
+        raise SystemExit("duplicate scenario/condition/run identities; select one documented primary attempt per cell")
+    expected = {(scenario, condition, run)
+                for scenario in manifest.get("scenarios", "").split(",")
+                for condition in manifest.get("conditions", "").split(",")
+                for run in range(1, int(manifest.get("runs_per_cell", 0)) + 1)}
+    complete = bool(expected) and set(identities) == expected
     cells = defaultdict(list)
     for run in runs:
         cells[(run["scenario"], run["condition"])].append(run)
@@ -57,6 +70,7 @@ def main(out_dir: str):
 
     lines = []
     lines.append("# Forge core benchmark results\n")
+    lines.append(f"Criteria: `{CRITERIA_VERSION}`. Matrix: **{'complete' if complete else 'INCOMPLETE — provisional results only'}** ({len(runs)} / {len(expected)} cells).\n")
     if manifest.get("mock"):
         lines.append("> **MOCK RUN — harness self-test only. These numbers say nothing about Forge.**\n")
     lines.append(
@@ -69,13 +83,14 @@ def main(out_dir: str):
     models = sorted({model for run in runs for model in run.get("models", [])})
     lines.append("Reported model IDs: " + (", ".join(f"`{model}`" for model in models) or "not reported") + ". See each run.json for its models.\n")
     lines.append(
-        "Pass = every gating assertion true. Tokens = input+output+cache tokens reported by the agent. "
+        "Pass = every automated gating assertion true; semantic scope, state accuracy, and process review remain pending. "
+        "Tokens = input+output+cache tokens reported by the agent. Provider cost estimates are informational, not billing or subscription charges. "
         "Times are wall-clock seconds for the agent session(s); B3 sums both fresh sessions. Variance columns: Wilson 95% CI on pass rate; "
         "stdev for completion, tokens, time. `n/a` means the agent did not report the field.\n"
     )
 
     lines.append("## Per-scenario results\n")
-    lines.append("| Benchmark | Condition | Passes | Runs | Pass rate | 95% CI | Req completion (mean±sd) | Drift | Later work resumed | Median tokens | Median runtime (s) |")
+    lines.append("| Benchmark | Condition | Passes | Runs | Pass rate | 95% CI | Req completion (mean±sd) | Detected scope loss | Later requirements passing | Median tokens | Median runtime (s) |")
     lines.append("|---|---|---:|---:|---:|---|---|---:|---:|---:|---:|")
     for scenario in scenarios:
         for cond in conds:
@@ -85,7 +100,7 @@ def main(out_dir: str):
             ci = wilson(k, n)
             comp = [run["requirements"]["completion_fraction"] for run in rs if run["requirements"]["completion_fraction"] is not None]
             drift = sum(1 for run in rs if run["scope_drift"])
-            resumed = [run["later_work_resumed"] for run in rs if run["later_work_resumed"] is not None]
+            resumed = [run["later_requirements_passing"] for run in rs if run["later_requirements_passing"] is not None]
             lines.append(
                 f"| {NAMES.get(scenario, scenario)} | {COND.get(cond, cond)} | {k} | {n} | {pct(k, n)} | "
                 f"{'n/a' if not ci else f'{ci[0]*100:.0f}–{ci[1]*100:.0f}%'} | "
@@ -135,8 +150,8 @@ def main(out_dir: str):
             )
     lines.append("")
 
-    lines.append("## Token / time overhead (Forge ÷ baseline, medians)\n")
-    if "baseline" in agg and "forge" in agg:
+    lines.append("## Token / time overhead (ratio of medians: Forge median ÷ baseline median)\n")
+    if complete and "baseline" in agg and "forge" in agg:
         lines.append("| Benchmark | Tokens ratio | Runtime ratio |")
         lines.append("|---|---:|---:|")
         for scenario in scenarios:
@@ -147,7 +162,8 @@ def main(out_dir: str):
         bt, ft, bs, fs = agg["baseline"]["tok"], agg["forge"]["tok"], agg["baseline"]["time"], agg["forge"]["time"]
         lines.append(f"| **All** | **{fmt(ft / bt, 2) if bt and ft else 'n/a'}** | **{fmt(fs / bs, 2) if bs and fs else 'n/a'}** |")
     else:
-        lines.append("Both conditions are needed to compute overhead.")
+        lines.append("A complete matrix with both conditions is required for a headline overhead comparison.")
+    lines.append("Later requirements passing is final test evidence, not proof that the session resumed that work. Inspect starting state and diffs to establish progress.\n")
     lines.append("")
 
     lines.append("## Assertion pass rates\n")

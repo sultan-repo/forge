@@ -1,6 +1,6 @@
 # Core Forge Benchmarks
 
-Status: **executable instrument available; real A/B results not yet measured.**
+Status: **executable instrument available; no public v4 A/B results.**
 
 Forge's core benchmark is no longer only a prose protocol. The runnable instrument lives in [`evals/core/`](core/README.md) and contains real fixture repositories, hidden requirement tests, deterministic scoring, fresh-session orchestration, raw-evidence capture, and aggregation.
 
@@ -56,12 +56,12 @@ Fixture:
 - mature repository
 - request is a one-line, low-risk, reversible change
 
-Pass if:
-- the requested behavior and affected test pass
-- no unnecessary requirements interview occurs
-- no new milestones/Work Packets/control documents are created solely for the trivial change
-- the plan is not rewritten
-- the change remains appropriately inspected and verified
+Automatically check that the requested behavior and affected tests pass and the
+approved requirement IDs remain. Review proportionality separately: necessary
+inspection and verification, relevance of any documents or questions, and measured
+time/token overhead. Relevant synchronization of the requested requirement is
+allowed; PLAN edits and a four-file change are not automatic failures. The precise
+automated/manual boundary is frozen in [criteria v4](core/CRITERIA_v4.md).
 
 ## Experimental controls
 
@@ -105,6 +105,9 @@ If baseline saturates on B2/B3, increase fixture difficulty before making effect
 | B4 Proportionality | Baseline | TBD | TBD | TBD | TBD | TBD | |
 | B4 Proportionality | Forge | TBD | TBD | TBD | TBD | TBD | |
 
-The harness additionally reports Wilson confidence intervals, requirement-completion variance, drift rate, later-work resumption, assertion-level results, and Forge/baseline token and runtime ratios.
+The harness additionally reports Wilson confidence intervals, requirement-completion variance,
+detected requirement-ID loss, final later-requirement test evidence, assertion-level results,
+and Forge/baseline ratios of median tokens and runtime. Final evidence does not by itself
+establish work resumed or truthful status. Those conclusions require source/diff review.
 
 See [`evals/core/README.md`](core/README.md) for the exact runnable procedure and known limits.

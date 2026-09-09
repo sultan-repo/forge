@@ -9,6 +9,7 @@ RUN useradd --create-home --uid 10001 scorer
 
 WORKDIR /scorer
 COPY assert_run.py score_entrypoint.py fixture_bundle.py fixture_bundle.json.gz.b64 /scorer/
+COPY hidden/ /scorer/hidden/
 RUN chmod -R a-w /scorer
 
 USER scorer

@@ -2,7 +2,7 @@
 
 Executable A/B instrument for Forge's four core behavioral benchmarks. It turns the protocol into real fixture repositories, hidden requirement tests, deterministic scoring, fresh agent sessions, preserved raw evidence, and an aggregate report.
 
-**Status: instrument built and mock-self-tested. No real benchmark runs are published yet.** Mock results validate the harness, not Forge.
+**Status: v4 instrument; no public live results under these criteria.** Mock results validate the harness, not Forge. See [the frozen scoring contract](CRITERIA_v4.md).
 
 ## What changed from the original protocol-only benchmark
 
@@ -122,9 +122,22 @@ This measures recovery from actual context loss without depending on a temporary
 
 ## Scoring
 
-`assert_run.py` combines executable artifact checks with visible text heuristics. It records REQ-tagged hidden tests, visible tests, invariants, dropped requirements, adjacent features, defect churn, later-work traceability/resumption, B3 handoff/recovery, B4 overhead, and token/time metrics where available. Agent execution errors and incomplete hidden-test execution are gating failures. B3 Stage 1 must correct the fixture's stale claim that its partial fix is complete; merely touching the inherited status file is insufficient. Stage-1 evidence is compared with the original fixture, including agent commits, and its cumulative diff is retained before the fresh Stage-2 session.
+`assert_run.py` records complete expected-test evidence, visible tests, invariants,
+requirement-ID loss, later-work traceability, B3 handoff checks, and effort metrics.
+Agent execution errors and incomplete required/invariant tests fail the cell.
+Missing later tests cannot count as completed work. Hidden tests use PLAN's public
+contracts and live as reviewable source under `hidden/`. B3 Stage 1 checks for
+correction of its stale partial-fix claim, but all prose-accuracy judgments still
+require review. Stage-1 evidence is compared with the original fixture, including
+agent commits, and its cumulative diff is retained before the fresh Stage-2 session.
 
-Heuristic thresholds remain visible in source and are not ground truth. B2/B3 may need a harder fixture if a strong baseline saturates.
+File counts, new modules, keyword hits, and churn are review signals, not semantic
+verdicts. A B4 implementation may synchronize related PLAN/status text. Automatic
+passes leave scope, state-accuracy and process review unresolved. An observed
+defect must be compared with fixture HEAD before attributing it to an arm.
+The aggregator refuses mixed criteria, labels ratios of medians, and withholds
+headline comparisons for an incomplete matrix. B2/B3 may need a harder fixture if
+a strong baseline saturates.
 
 ## Counterbalancing
 
@@ -145,14 +158,17 @@ BENCH_MOCK_AGENT=drifter bash evals/core/run.sh --conditions baseline --runs 1 -
 python3 evals/core/selftest.py /tmp/forge-drift --expect fail
 ```
 
-The reference agent proves fixtures are satisfiable. No-op and drifting agents prove the scorer fails closed for missing work, scope drift, bad handoff behavior, and unnecessary bureaucracy.
+The reference agent demonstrates fixture satisfiability. No-op and drifting
+agents exercise missing work, actual removal of approved scope, and failed
+handoff checks. They do not establish the accuracy of prose review or measure
+unnecessary bureaucracy.
 
 Use fresh output directories for each invocation. Run `python3 -m pytest -q tests/test_benchmark_harness.py` for controller/scoring regressions and `tests/test_benchmark_isolation.py` with a built `BENCH_SCORER_IMAGE` for Docker isolation and timeout cleanup checks.
 
 ## Known limits
 
 - Single-turn headless sessions are used within each stage. Human interaction dynamics are not measured.
-- Scope-drift/churn signals include explicit heuristics with documented thresholds.
+- Requirement IDs and handoff keywords measure traceability. Semantic scope and truthful completion claims need evidence-based review.
 - B2/B3 fixture difficulty is intentionally modest for the first empirical batch. If baseline saturates, increase difficulty before interpreting Forge effectiveness.
 - The optional third candidate/ablation arm is represented by `FORGE_DIR`, not part of the default stable A/B matrix.
 - A verified Forge release proves what package was loaded; it does not prove Forge helps. Only real A/B outcomes can answer that.
@@ -163,7 +179,9 @@ Use fresh output directories for each invocation. Run `python3 -m pytest -q test
 run.sh                         matrix runner, isolation, provenance, activation preflight, evidence capture
 build_fixtures.py              materializes scenario repos from the compact bundle
 fixture_bundle.py              reads the compact bundle without shared writable files
-fixture_bundle.json.gz.b64     compressed reference fixture, overlays, hidden tests, and prompts
+fixture_bundle.json.gz.b64     compressed reference fixture, overlays, legacy hidden archive, and prompts
+hidden/                       editable current public-contract hidden tests
+CRITERIA_v4.md                 automated gates, manual review boundary, comparison contract
 assert_run.py                  deterministic scorer
 score_entrypoint.py            disposable scoring copy and structured result transport
 container_run.py               portable container deadline and cleanup

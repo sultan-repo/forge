@@ -36,7 +36,7 @@ jobs:
             "${{ github.event.pull_request.base.sha }}" \
             "${{ github.event.pull_request.head.sha }}" > /tmp/forge-changed-files.txt
 
-          if grep -Eq '^(scripts/|templates/|tests/|evals/core/|requirements-dev\.txt|\.github/workflows/)' /tmp/forge-changed-files.txt; then
+          if grep -Eq '^(SKILL\.md|references/|scripts/|templates/|tests/|evals/|requirements-dev\.txt|\.github/workflows/)' /tmp/forge-changed-files.txt; then
             echo "dual_agent=true" >> "$GITHUB_OUTPUT"
           else
             echo "dual_agent=false" >> "$GITHUB_OUTPUT"
@@ -67,8 +67,10 @@ jobs:
         run: python3 -m pip install --disable-pip-version-check -r requirements-dev.txt
       - name: Validate skill package
         run: python3 scripts/validate-skill-package.py
+      - name: Validate behavioral evaluation specifications (no model sessions)
+        run: python3 evals/validate_evals.py
       - name: Lint Forge Python
-        run: python3 -m ruff check scripts templates evals/core tests
+        run: python3 -m ruff check scripts templates evals tests
       - name: Strict type-check Forge Python
         run: |
           python3 -m mypy --strict \
@@ -78,6 +80,8 @@ jobs:
             scripts/adapters/base.py \
             scripts/adapters/claude_code.py \
             scripts/adapters/codex_cli.py \
+            scripts/forge-preflight.py \
+            scripts/validate-skill-package.py \
             scripts/forge-run.py
 
   dual-agent-tests:

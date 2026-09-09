@@ -182,20 +182,35 @@ def test_transcripts_record_reported_models_across_fresh_sessions(tmp_path: Path
     assert scorer.parse_transcript(None)["models"] == []
 
 
-def test_container_deadline_removes_container(tmp_path: Path) -> None:
-    runtime = tmp_path / "runtime"
-    log = tmp_path / "calls.jsonl"
-    runtime.write_text(
-        f"#!{sys.executable}\nimport json,sys,time\n"
-        f"with open({str(log)!r}, 'a') as stream: stream.write(json.dumps(sys.argv[1:])+'\\n')\n"
-        "if sys.argv[1] == 'run': time.sleep(60)\n",
-        encoding="utf-8",
-    )
-    runtime.chmod(0o755)
-    assert containers.run_container(str(runtime), 2, ["image", "command"]) == 124
-    calls = [json.loads(line) for line in log.read_text().splitlines()]
-    assert calls[0][:2] == ["run", "--name"]
-    assert calls[1] == ["rm", "-f", calls[0][2]]
+def test_container_deadline_stops_launcher_before_removing_container(monkeypatch: pytest.MonkeyPatch) -> None:
+    events = []
+
+    class StartingRuntime:
+        def __init__(self, command):
+            events.append(command)
+
+        def wait(self, timeout=None):
+            events.append("wait")
+            if timeout is not None:
+                raise subprocess.TimeoutExpired("runtime", timeout)
+            return -9
+
+        def poll(self):
+            return None
+
+        def kill(self):
+            events.append("kill")
+
+    def remove(command, **_kwargs):
+        events.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(containers.subprocess, "Popen", StartingRuntime)
+    monkeypatch.setattr(containers.subprocess, "run", remove)
+    assert containers.run_container("runtime", 2, ["image", "command"]) == 124
+    assert events[0][:3] == ["runtime", "run", "--name"]
+    assert events[1:4] == ["wait", "kill", "wait"]
+    assert events[4] == ["runtime", "rm", "-f", events[0][3]]
 
 
 @pytest.mark.parametrize("payload", [
