@@ -49,3 +49,5 @@ Before making an effectiveness or release-readiness claim, run fresh matched com
 Freeze task contracts, criteria, identities, comparison rules, and resource limits first. Use complete paired blocks and independent evidence review. Report uncertainty and failures; do not use small samples or equal pass totals as proof of equivalence. Provider-estimated dollars, reported tokens, and actual billing/subscription usage are different measurements.
 
 This revision prepares the implementation and evaluation paths. It does not run a new paid/subscription benchmark, merge itself, or publish a release.
+
+See [validation evidence and reproduction commands](VALIDATION.md) for observed checks, independent smoke cases, and limitations.
