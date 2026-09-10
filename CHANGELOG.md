@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.11.1
 
 Benchmark reliability and evaluation-boundary repair:
 
@@ -11,7 +11,7 @@ Benchmark reliability and evaluation-boundary repair:
 - separates new B4n/B4a/Q4/S2/V1 criteria from core v4, resolves the conditional change-record rule, and keeps incomplete comparisons and semantic review explicit
 - fixes run-order stdin inheritance and documents product comparisons separately from loading-only ablations
 
-Forge instructions and VERSION are unchanged. These offline checks establish harness behavior; no new live model comparison or effectiveness claim is included.
+Forge instructions are unchanged in this benchmark and package maintenance patch. These offline checks establish harness behavior; no new live model comparison or effectiveness claim is included.
 
 ## 1.11.0
 

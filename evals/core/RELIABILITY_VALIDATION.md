@@ -1,6 +1,9 @@
 # Benchmark reliability repair validation
 
 Date: 2026-09-10. Base: `130e71314269666ce31abee8afe84bd380a59c06`.
+This records repair validation before the release metadata was promoted from
+1.11.0 to 1.11.1. The release workflow validates the final versioned main commit
+again before publication.
 Local validation used macOS, Python 3.14.7 and Docker Desktop. CI repeats the
 checks on Ubuntu with Python 3.12. These are instrument tests, not measured
 Forge outcomes. No live Claude sessions, subscription usage or API spending
