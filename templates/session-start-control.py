@@ -8,6 +8,7 @@ non-blocking by design.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -35,14 +36,22 @@ def validate_control(root: Path, control: Path) -> str:
     if validator is None:
         return "not checked"
 
-    completed = subprocess.run(
-        [sys.executable, str(validator), str(control)],
-        capture_output=True,
-        check=False,
-        text=True,
-    )
+    try:
+        completed = subprocess.run(
+            [sys.executable, str(validator), str(control)],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return f"not checked: validator unavailable ({type(exc).__name__})"
     if completed.returncode == 0:
-        return "valid"
+        warnings = [line.removeprefix("CONTROL WARNING: ").strip() for line in completed.stderr.splitlines()
+                    if line.startswith("CONTROL WARNING:")]
+        if warnings:
+            return f"valid structure; {len(warnings)} warning(s): " + "; ".join(warnings[:3])
+        return "valid structure (does not verify requirement evidence)"
 
     stderr_lines = completed.stderr.strip().splitlines()
     detail = stderr_lines[-1] if stderr_lines else "validator failed"
@@ -100,7 +109,7 @@ def orientation_message(state: JsonObject, validation: str) -> str:
 def main() -> int:
     """Hook entry point."""
     event = read_event()
-    root = Path(str(event.get("cwd") or "."))
+    root = Path(os.environ.get("CLAUDE_PROJECT_DIR") or str(event.get("cwd") or "."))
     control = root / ".claude" / "project-control.json"
     if not control.exists():
         return 0

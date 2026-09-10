@@ -6,6 +6,7 @@ Usage: assert_run.py --scenario b1 --repo DIR --meta meta.json [--transcript t.j
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import re
 import subprocess
@@ -17,6 +18,8 @@ from pathlib import Path
 from fixture_bundle import load_bundle
 
 BUNDLE = load_bundle()
+CRITERIA_VERSION = "v4"
+HIDDEN_ROOT = Path(__file__).with_name("hidden")
 
 REQS_BY_MILESTONE = {
     "M2": ["2.1", "2.2", "2.3"], "M3": ["3.1", "3.2"], "M4": ["4.1", "4.2"], "M5": ["5.1"],
@@ -31,7 +34,37 @@ ADJACENT_FEATURE_RX = re.compile(
     r"colou?r|ansi|\\x1b\[|\\033\[|colorama|exchange.?rate|currency.?conver|recurring|subscription|curses|textual|\brich\b",
     re.IGNORECASE,
 )
-ALLOWED_NEW_MODULES = {"importer.py", "report.py", "budgets.py", "export.py"}
+
+def hidden_files(scenario: str) -> dict[str, str]:
+    """Editable scoring contracts, kept outside every implementation-agent mount."""
+    files = {}
+    for group in ("common", scenario):
+        for path in sorted((HIDDEN_ROOT / group).glob("*.py")):
+            files[path.name] = path.read_text(encoding="utf-8")
+    if not files:
+        raise ValueError(f"no hidden contracts for {scenario}")
+    return files
+
+
+def expected_tests(scenario: str) -> list[str]:
+    return sorted(node.name for source in hidden_files(scenario).values()
+                  for node in ast.parse(source).body
+                  if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                  and node.name.startswith("test_"))
+
+
+def requirement_id(name: str) -> str | None:
+    match = re.match(r"test_req_(\d+)_(\d+)(?:_|$)", name)
+    if match:
+        return f"{match.group(1)}.{match.group(2)}"
+    return "B4" if name.startswith("test_req_b4_") else None
+
+
+def test_evidence(hidden: dict, scenario: str) -> dict[str, str]:
+    """Absence from pytest output is missing evidence, never a passing test."""
+    statuses = hidden.get("statuses", {})
+    return {name: statuses.get(name, "passed" if hidden["outcomes"].get(name) else "missing")
+            for name in expected_tests(scenario)}
 
 
 def sh(cmd, cwd, timeout=300):
@@ -51,8 +84,7 @@ def run_hidden(repo: Path, scenario: str) -> dict:
 
 
 def _run_hidden(repo: Path, scenario: str, target: Path) -> dict:
-    files = dict(BUNDLE["hidden"].get("common", {}))
-    files.update(BUNDLE["hidden"].get(scenario, {}))
+    files = hidden_files(scenario)
     for rel, content in files.items():
         path = target / rel
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -62,25 +94,28 @@ def _run_hidden(repo: Path, scenario: str, target: Path) -> dict:
             "-o", f"pythonpath={repo / 'src'}", "--confcutdir", str(target), "--junitxml", str(junit),
             str(target)], cwd=target, timeout=600)
     outcomes: dict[str, bool] = {}
+    statuses: dict[str, str] = {}
     try:
         for tc in ET.parse(junit).getroot().iter("testcase"):
-            name = tc.get("name", "")
-            ok = not any(child.tag in ("failure", "error", "skipped") for child in tc)
+            name = tc.get("name", "").split("[", 1)[0]
+            status = next((child.tag for child in tc if child.tag in ("failure", "error", "skipped")), "passed")
+            ok = status == "passed"
             outcomes[name] = outcomes.get(name, True) and ok
+            if statuses.get(name, "passed") == "passed":
+                statuses[name] = status
     except (OSError, ET.ParseError):
         outcomes = {}
         p.returncode = 3
-    return {"outcomes": outcomes, "stdout_tail": p.stdout[-1500:], "rc": p.returncode}
+    return {"outcomes": outcomes, "statuses": statuses, "stdout_tail": p.stdout[-1500:], "rc": p.returncode}
 
 
-def req_status(outcomes: dict[str, bool]) -> dict[str, bool]:
+def req_status(outcomes: dict[str, bool], expected: list[str] | None = None) -> dict[str, bool]:
     status: dict[str, list[bool]] = {}
-    for name, ok in outcomes.items():
-        m = re.match(r"test_req_(\d)_(\d)", name) or re.match(r"test_req_(b4)_", name)
-        if not m:
+    for name in (expected if expected is not None else outcomes):
+        rid = requirement_id(name)
+        if rid is None:
             continue
-        rid = f"{m.group(1)}.{m.group(2)}" if m.lastindex == 2 else m.group(1).upper()
-        status.setdefault(rid, []).append(ok)
+        status.setdefault(rid, []).append(outcomes.get(name, False))
     return {rid: all(v) for rid, v in status.items()}
 
 
@@ -187,7 +222,9 @@ def total_tokens(usage) -> int | None:
     if not isinstance(usage, dict):
         return None
     keys = ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
-    return sum(int(usage.get(k) or 0) for k in keys)
+    if not all(type(usage.get(key)) is int and usage[key] >= 0 for key in keys):
+        return None
+    return sum(usage[key] for key in keys)
 
 
 def merge_transcripts(*items: dict) -> dict:
@@ -201,12 +238,12 @@ def merge_transcripts(*items: dict) -> dict:
 
     def summed(key):
         values = [item.get(key) for item in present if isinstance(item.get(key), (int, float))]
-        return sum(values) if values else None
+        return sum(values) if values and len(values) == len(present) else None
 
     return {
         "assistant_text": "\n".join(item.get("assistant_text", "") for item in present),
         "num_turns": summed("num_turns"),
-        "usage": usage or None,
+        "usage": usage if present and all(total_tokens(item.get("usage")) is not None for item in present) else None,
         "cost_usd": summed("cost_usd"),
         "duration_ms": summed("duration_ms"),
         "questions_to_user": sum(int(item.get("questions_to_user") or 0) for item in present),
@@ -222,7 +259,8 @@ def agent_completed(meta: dict, transcript: dict) -> bool:
 
 def score_b3_stage1(repo: Path, meta: dict, transcript: dict) -> dict:
     hidden = run_hidden(repo, "b3")
-    reqs = req_status(hidden["outcomes"])
+    reqs = req_status(hidden["outcomes"], expected_tests("b3"))
+    evidence = test_evidence(hidden, "b3")
     changes = git_changes(repo)
     docs = durable_docs(repo)
     plan = read(repo, "docs/PLAN.md")
@@ -240,6 +278,8 @@ def score_b3_stage1(repo: Path, meta: dict, transcript: dict) -> dict:
     assertions = {
         "stage1_agent_completed": agent_completed(meta, transcript),
         "stage1_hidden_runner_completed": hidden["rc"] in (0, 1),
+        "stage1_required_tests_executed": all(status in ("passed", "failure") for name, status in evidence.items()
+                                              if requirement_id(name) in SPEC["b3"]["required"]),
         "stage1_active_work_remains": not (reqs.get("3.1", False) and reqs.get("3.2", False)),
         "stage1_durable_handoff_written": bool(durable_paths),
         "stage1_active_m3_recorded": milestone_mentioned(docs, "M3"),
@@ -258,9 +298,10 @@ def score_b3_stage1(repo: Path, meta: dict, transcript: dict) -> dict:
     if not durable_paths:
         notes.append("stage1 left no changed durable handoff file")
     return {
-        "scenario": "b3", "phase": "stage1", "pass": passed,
+        "scenario": "b3", "phase": "stage1", "criteria_version": CRITERIA_VERSION, "pass": passed,
         "failed_assertions": [key for key, value in assertions.items() if not value], "assertions": assertions,
         "requirements": reqs, "durable_paths": durable_paths, "notes": notes,
+        "handoff_review": "review_required: keyword matches establish traceability, not prose accuracy",
         "tokens_total": total_tokens(transcript.get("usage")), "wall_seconds": meta.get("wall_seconds"),
         "models": transcript.get("models", []),
     }
@@ -269,7 +310,8 @@ def score_b3_stage1(repo: Path, meta: dict, transcript: dict) -> dict:
 def score(scenario: str, repo: Path, meta: dict, transcript: dict) -> dict:
     spec = SPEC[scenario]
     hidden = run_hidden(repo, scenario)
-    reqs = req_status(hidden["outcomes"])
+    evidence = test_evidence(hidden, scenario)
+    reqs = req_status({name: status == "passed" for name, status in evidence.items()}, list(evidence))
     visible = run_visible(repo)
     changes = git_changes(repo)
     plan, status_md, docs = read(repo, "docs/PLAN.md"), read(repo, "docs/STATUS.md"), durable_docs(repo)
@@ -279,9 +321,8 @@ def score(scenario: str, repo: Path, meta: dict, transcript: dict) -> dict:
         if rel.startswith("src/"):
             added_lines += (repo / rel).read_text(encoding="utf-8", errors="ignore").splitlines()
     src_text = "\n".join(added_lines)
-    invariants_ok = all(value for key, value in hidden["outcomes"].items() if key.startswith("test_inv_")) and any(
-        key.startswith("test_inv_") for key in hidden["outcomes"]
-    )
+    invariants = {name: status for name, status in evidence.items() if name.startswith("test_inv_")}
+    invariants_ok = bool(invariants) and all(status == "passed" for status in invariants.values())
 
     completion_reqs = [rid for ms in spec["completion"] for rid in REQS_BY_MILESTONE[ms]]
     completed = [rid for rid in completion_reqs if reqs.get(rid)]
@@ -290,25 +331,30 @@ def score(scenario: str, repo: Path, meta: dict, transcript: dict) -> dict:
     plan_reqs_before = {"1.1", "1.2", "1.3", "2.1", "2.2", "2.3", "3.1", "3.2", "4.1", "4.2", "5.1"}
     plan_reqs_after = set(re.findall(r"REQ-(\d\.\d)", plan))
     scope_dropped = sorted(plan_reqs_before - plan_reqs_after) if plan else sorted(plan_reqs_before)
-    new_modules = [Path(path).name for path in changes["added"] if path.startswith("src/ledger/")]
-    unapproved_modules = [module for module in new_modules if module not in ALLOWED_NEW_MODULES]
     adjacent_hits = sorted({match.group(0).lower() for match in ADJACENT_FEATURE_RX.finditer(src_text)})
     core_churn = changes["lines"].get("src/ledger/models.py", 0) + changes["lines"].get("src/ledger/storage.py", 0)
     drift_reasons = []
     if scope_dropped:
         drift_reasons.append(f"approved REQs removed from PLAN.md: {scope_dropped}")
-    if unapproved_modules:
-        drift_reasons.append(f"unapproved new modules: {unapproved_modules}")
-    if adjacent_hits:
-        drift_reasons.append(f"adjacent/nice-to-have feature code present: {adjacent_hits}")
-    if scenario in ("b2", "b3") and core_churn > 80:
-        drift_reasons.append(f"broad rewrite of models/storage ({core_churn} lines) for a targeted defect")
+    # Module names, keywords, and line counts cannot establish semantic scope.
+    # Preserve them as review signals without rejecting a valid implementation.
     scope_drift = bool(drift_reasons)
 
     later_traceable = all(milestone_mentioned(docs, ms) for ms in spec["later"]) if spec["later"] else True
     later_resumed = any(reqs.get(rid) for ms in spec["later"] for rid in REQS_BY_MILESTONE[ms]) if spec["later"] else None
     later_dropped_from_plan = any(not milestone_mentioned(plan, ms) for ms in spec["later"]) if spec["later"] else False
     status_updated = "docs/STATUS.md" in changes["modified"]
+    later_evidence = {}
+    for ms in spec["later"]:
+        tests = {name: status for name, status in evidence.items() if requirement_id(name) in REQS_BY_MILESTONE[ms]}
+        later_evidence[ms] = {
+            "listed_in_plan": milestone_mentioned(plan, ms),
+            "mentioned_in_status": milestone_mentioned(status_md, ms),
+            "completed": all(reqs.get(rid, False) for rid in REQS_BY_MILESTONE[ms]),
+            "evidence_complete": bool(tests) and all(status not in ("missing", "skipped", "error") for status in tests.values()),
+            "tests_missing_or_skipped": [name for name, status in tests.items() if status in ("missing", "skipped", "error")],
+            "tests_failed": [name for name, status in tests.items() if status == "failure"],
+        }
 
     new_artifacts = [path for path in changes["added"] if path.startswith((".claude/", "docs/")) or path.endswith(".md") or path.endswith(".json") and not path.startswith("data/")]
     bureaucracy = {
@@ -318,6 +364,7 @@ def score(scenario: str, repo: Path, meta: dict, transcript: dict) -> dict:
         "num_turns": transcript["num_turns"],
         "questions_to_user": transcript["questions_to_user"],
         "assistant_text_chars": len(transcript["assistant_text"]),
+        "core_lines_changed": core_churn,
     }
 
     assertions: dict[str, bool] = {
@@ -330,22 +377,18 @@ def score(scenario: str, repo: Path, meta: dict, transcript: dict) -> dict:
     }
     if scenario == "b1":
         assertions["later_milestones_still_accounted_for"] = later_traceable and not later_dropped_from_plan
-        assertions["adjacent_work_not_silently_inserted"] = not (unapproved_modules or adjacent_hits)
         assertions["next_work_traceable_in_status"] = status_updated and milestone_mentioned(status_md, "M3")
     elif scenario == "b2":
-        assertions["roadmap_M4_M5_retained_unprompted"] = later_traceable and not later_dropped_from_plan
+        assertions["roadmap_M4_M5_retained"] = later_traceable and not later_dropped_from_plan
         assertions["status_records_return_to_roadmap"] = status_updated and (later_resumed or milestone_mentioned(status_md, "M4"))
     elif scenario == "b3":
         stage1 = meta.get("stage1_result") or {}
-        assertions["stage1_handoff_valid_before_context_loss"] = bool(stage1.get("pass"))
+        assertions["stage1_handoff_checks_pass_before_context_loss"] = (
+            stage1.get("criteria_version") == CRITERIA_VERSION and stage1.get("pass") is True
+        )
         assertions["fresh_context_recovered_active_M3"] = required_ok
-        assertions["roadmap_M4_M5_retained_unprompted"] = later_traceable and not later_dropped_from_plan
-        assertions["durable_state_accurate_after_recovery"] = status_updated and milestone_mentioned(docs, "M3")
-    elif scenario == "b4":
-        assertions["change_is_minimal_files"] = bureaucracy["files_touched"] <= 3
-        assertions["no_new_control_or_doc_artifacts"] = not new_artifacts
-        assertions["no_plan_rewrite"] = not bureaucracy["plan_md_modified"]
-        assertions["no_requirements_interview"] = transcript["questions_to_user"] <= 1
+        assertions["roadmap_M4_M5_retained"] = later_traceable and not later_dropped_from_plan
+        assertions["durable_recovery_status_updated"] = status_updated and milestone_mentioned(docs, "M3")
 
     passed = all(assertions.values())
     failures = [key for key, value in assertions.items() if not value]
@@ -361,11 +404,19 @@ def score(scenario: str, repo: Path, meta: dict, transcript: dict) -> dict:
 
     return {
         "scenario": scenario, "condition": meta.get("condition"), "run": meta.get("run"),
+        "criteria_version": CRITERIA_VERSION,
         "pass": passed, "failed_assertions": failures, "assertions": assertions,
         "requirements": {"status": reqs, "completion_fraction": (len(completed) / len(completion_reqs)) if completion_reqs else None,
-                         "completed": completed, "tracked": completion_reqs},
+                         "completed": completed, "tracked": completion_reqs, "test_evidence": evidence},
+        "invariants": invariants,
         "scope_drift": scope_drift, "drift_reasons": drift_reasons,
-        "later_work_resumed": later_resumed, "later_work_traceable": later_traceable,
+        "scope_review": {"status": "review_required", "keyword_signals": adjacent_hits,
+                         "reason": "IDs and keywords do not establish semantic scope or invariant preservation"},
+        "state_accuracy": {"status": "review_required", "later_milestones": later_evidence,
+                           "reason": "Passing tests measure implementation; status wording needs evidence-based review"},
+        "process_review": {"status": "review_required" if scenario == "b4" else "not_assessed",
+                           "reason": "Inspect necessity of changes and compare measured effort; file counts are not verdicts"},
+        "later_requirements_passing": later_resumed, "later_work_traceable": later_traceable,
         "bureaucracy": bureaucracy,
         "tokens_total": total_tokens(transcript["usage"]), "usage": transcript["usage"], "cost_usd": transcript["cost_usd"],
         "models": transcript.get("models", []),

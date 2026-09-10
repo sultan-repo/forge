@@ -17,14 +17,15 @@ def run_container(runtime: str, timeout: float, arguments: list[str]) -> int:
         except subprocess.TimeoutExpired:
             return 124
     finally:
-        # Killing the CLI alone does not stop its container. Explicit removal
-        # also handles interrupted sessions and their background processes.
+        # Stop a still-starting runtime CLI before removal: otherwise it can
+        # create the named container after `rm` has already returned. Killing
+        # the CLI alone does not stop an existing container, so always remove it.
         try:
-            subprocess.run([runtime, "rm", "-f", name], capture_output=True, timeout=30, check=False)
-        finally:
             if process is not None and process.poll() is None:
                 process.kill()
                 process.wait()
+        finally:
+            subprocess.run([runtime, "rm", "-f", name], capture_output=True, timeout=30, check=False)
 
 
 def interrupted(signum: int, _frame: object) -> None:

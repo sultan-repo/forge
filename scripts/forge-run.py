@@ -577,22 +577,20 @@ def implementation_prompt(
 ) -> str:
     packet = state["work_packets"][packet_id]
     prompt = f"""
-You are the IMPLEMENTER for Forge Work Packet {packet_id}.
-Work only inside the current project's approved scope. Read the canonical requirements,
-architecture, plan, tests, and {control_rel.as_posix()} before editing.
+You implement Forge Work Packet {packet_id} within its authorized scope.
+Start from this snapshot and {control_rel.as_posix()}; read relevant requirement,
+invariant, source, and test sections. Expand for risk or gaps; reuse current evidence.
 
 Packet snapshot:
 {json.dumps(packet, indent=2)}
 
 Rules:
-- Make the smallest coherent implementation that satisfies the Work Packet.
-- Run relevant tests/checks and fix failures caused by your work.
-- Preserve legitimate canonical Forge state updates such as requirement evidence.
-- Do not silently expand scope.
+- Make the smallest coherent solution; fix failures caused by your work.
+- Tie acceptance/invariant claims to named checks and results. Label failures and
+  unverified checks; reporting a defect does not satisfy a requirement.
+- Preserve legitimate canonical state/evidence updates. Do not expand scope.
 - Do not mark the packet approved, independently reviewed, reconciled, or done.
-- Do not create Git commits; the Forge runner owns review checkpoints.
-- Do not edit .claude/forge/runtime; the runner owns execution and review evidence.
-- Keep user-facing text concise.
+- Do not commit or edit .claude/forge/runtime; the runner owns checkpoints/evidence.
 
 Finish with a JSON object only:
 {{
@@ -606,8 +604,8 @@ Only report validation you actually ran.
 """
     if findings:
         prompt += f"""
-This is a correction attempt. Address only the current-scope review findings below.
-Independently verify them against primary evidence; do not implement adjacent/future/unrelated findings.
+Correction attempt: verify these current-scope findings against primary evidence.
+Address them without implementing adjacent/future/unrelated findings.
 
 Current-scope review findings:
 {json.dumps(findings, indent=2)}
@@ -629,7 +627,8 @@ You are the independent REVIEWER for Forge Work Packet {packet_id}.
 
 Review the repository at commit {reviewed_commit} against approved project intent.
 The packet began at {packet_base}. Inspect the complete diff {packet_base}..{reviewed_commit},
-current source, tests, configuration, requirements, architecture, and relevant evidence.
+then inspect the affected contracts, relevant source/tests, and supporting evidence.
+Expand investigation when risk or missing evidence warrants it.
 
 Packet snapshot:
 {json.dumps(packet, indent=2)}
@@ -989,6 +988,28 @@ def status(root: Path, control_path: Path, packet_id: str | None, verbose: bool)
     return 2 if approval_issue else 0
 
 
+def enforce_saved_execution_preferences(root: Path) -> None:
+    """Honor explicit auth/live-probe policy without dispatching a probe."""
+    saved = (root / ".claude/forge/project-preferences.json", runtime_path(root, "local-preferences.json"))
+    if not any(path.exists() for path in saved):
+        return
+    result = run_local(
+        [sys.executable, str(SCRIPT_DIR / "forge-preflight.py"), "--json", "--review"],
+        root,
+        timeout_s=150,
+    )
+    try:
+        report = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise ForgeRunnerError("Saved external execution preferences could not be checked. Run `forge preflight --review`.") from exc
+    if not isinstance(report, dict) or result.returncode not in {0, 1} or report.get("status") not in {"READY", "READY_WITH_WARNINGS"}:
+        blockers = report.get("blockers", []) if isinstance(report, dict) else []
+        detail = "; ".join(str(item) for item in blockers)[:700] if isinstance(blockers, list) else ""
+        raise ForgeRunnerError(f"External execution preferences block this run. {detail}")
+    for warning in report.get("warnings", []):
+        print(f"WARNING: {warning}")
+
+
 def run_packet(
     root: Path,
     control_path: Path,
@@ -1035,6 +1056,7 @@ def run_packet(
         print("The project plan changed during implementation. Reconcile it before review.")
         return 2
 
+    enforce_saved_execution_preferences(root)
     implementer = ClaudeCodeImplementer()
     reviewer = CodexCLIReviewer()
     ok, message = implementer.doctor(root)
@@ -1298,7 +1320,7 @@ def run_packet(
                 execution["approved_at"] = utc_now()
                 execution["reason"] = None
                 save_execution_state(root, packet_id, execution)
-                print("Done. The implementation was independently reviewed and passed.")
+                print("Independent review passed. Reconcile requirement evidence before marking the Work Packet done.")
                 if detail_verbose:
                     print(f"Reviewed checkpoint: {reviewed_commit}")
                     print(f"Review evidence: {review_result_path(root, packet_id, cycle).relative_to(root)}")

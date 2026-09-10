@@ -53,6 +53,12 @@ The runnable benchmark lives in [`core/`](core/README.md). It provides:
 
 CI exercises deterministic mock self-tests and dedicated container-isolation regressions when relevant files change. Mock outcomes show that the scorer can pass the reference fixtures and reject the included no-op/drifting behavior; they are **not** Forge benchmark results. Container checks test specific isolation properties, not all possible adversarial behavior.
 
+The public scorer now uses [criteria v4](core/CRITERIA_v4.md). It fixes incomplete
+hidden-test evidence and implementation-specific gates, and separates automated
+artifact checks from unresolved semantic/process review. v4 must not be pooled
+with earlier scores. Existing private or local result directories are not
+published evidence for this repository revision.
+
 ## Conditions
 
 For methodology evaluation use at least:
@@ -80,6 +86,20 @@ Weaker:
 - claim a fresh baseline from a conversation that already knows Forge
 
 `evals.json` remains the broad behavioral regression specification; its expectations require an agent-evaluation run and are not executed by package validation. `bootstrap-evals.json` covers remote bootstrap and explicit-name invocation. `CORE-BENCHMARKS.md` defines the empirical benchmark contract, and `core/` implements it.
+
+[`adaptive-evals.json`](adaptive-evals.json) adds natural requests for quick work,
+risk discovered during inspection, use of existing status records, trustworthy
+completion claims, read-only status, and recovery in a fresh session. Prepare the
+stated repositories and execute the cases before reporting outcomes; they are not
+additional executable core scenarios. `python3 evals/validate_evals.py` checks
+their structure in CI and explicitly reports that no model session was run.
+
+For the next methodology comparison, test one intervention at a time. Compare
+baseline, unchanged Forge and the proposed package in fresh sessions; preserve
+correctness and risk safeguards. Evaluate simple work by effort as well as
+correctness, and interrupted work by missed requirements, repeated investigation,
+recovery time and claim accuracy. A shorter instruction file alone is not evidence
+of reduced model tokens or better outcomes.
 
 The scorer runs project code in a separate container to protect the controller host. Hidden tests are withheld from the implementation agent, but scoring is not a proof against adversarial manipulation of the test process. The activation preflight verifies that the package can be found and read; it does not prove that subsequent benchmark sessions follow Forge. See [the harness limits](core/README.md#known-limits).
 

@@ -48,7 +48,9 @@ import hashlib
 from pathlib import Path
 
 digest = hashlib.sha256()
-for name in ("container/ScorerContainerfile", "assert_run.py", "score_entrypoint.py", "fixture_bundle.py", "fixture_bundle.json.gz.b64"):
+names = ["container/ScorerContainerfile", "assert_run.py", "score_entrypoint.py", "fixture_bundle.py", "fixture_bundle.json.gz.b64"]
+names.extend(str(path) for path in sorted(Path("hidden").rglob("*.py")))
+for name in names:
     digest.update(name.encode())
     digest.update(Path(name).read_bytes())
 print(digest.hexdigest())
@@ -540,10 +542,12 @@ import datetime
 import json
 import os
 import pathlib
+from assert_run import CRITERIA_VERSION
 
 path = pathlib.Path(os.environ["OUT"]) / "MANIFEST.json"
 mock = os.environ.get("MOCK") == "true"
 obj = {
+    "criteria_version": CRITERIA_VERSION,
     "started_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     "forge_ref": os.environ.get("FORGE_TAG"),
     "forge_version": os.environ.get("FORGE_VERSION"),

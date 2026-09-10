@@ -33,7 +33,7 @@ def install(source, destination, *, extra_env=None, entrypoint="install.sh"):
     return subprocess.run(["bash", str(source / "scripts" / entrypoint)], env=env, text=True, capture_output=True, check=False)
 
 
-@pytest.mark.parametrize("name", ["project-control", "execution-profile", "implementation-handoff", "review-result"])
+@pytest.mark.parametrize("name", ["project-control", "execution-profile", "implementation-handoff", "review-result", "project-preferences"])
 def test_distributed_schemas_and_examples_remain_valid(name):
     schema = json.loads((ROOT / "templates" / f"{name}.schema.json").read_text())
     schema_validator = jsonschema.validators.validator_for(schema)
@@ -259,3 +259,45 @@ def test_verified_bootstrap_reports_custom_install_path(package, tmp_path):
     assert (skills / "forge/SKILL.md").exists()
     assert "FORGE_BOOTSTRAP_READY" in result.stdout
     assert f"Load {skills}/forge/SKILL.md directly" in result.stdout
+
+
+def test_missing_python_does_not_replace_install_without_validation(package, tmp_path):
+    skills = tmp_path / "skills"
+    previous = skills / "forge"
+    previous.mkdir(parents=True)
+    (previous / "previous.txt").write_text("keep the validated installation")
+    commands = tmp_path / "commands"
+    commands.mkdir()
+    (commands / "dirname").symlink_to(shutil.which("dirname"))
+    result = subprocess.run(
+        ["/bin/bash", str(package / "scripts/install.sh")],
+        env=dict(os.environ, PATH=str(commands), CLAUDE_SKILLS_DIR=str(skills)),
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "requires Python 3" in result.stderr
+    assert (previous / "previous.txt").read_text() == "keep the validated installation"
+    assert not list(skills.glob("forge.backup.*"))
+
+
+@pytest.mark.parametrize("path", [
+    "scripts/forge-preflight.py", "templates/project-preferences.example.json", "templates/project-preferences.schema.json",
+])
+def test_missing_preflight_distribution_is_rejected(package, path):
+    (package / path).unlink()
+    result = subprocess.run([sys.executable, str(package / "scripts/validate-skill-package.py")],
+                            text=True, capture_output=True, check=False)
+    assert result.returncode == 2
+    assert path in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_invalid_preflight_example_is_rejected(package):
+    path = package / "templates/project-preferences.example.json"
+    preferences = json.loads(path.read_text())
+    preferences["codex_review_policy"] = "automatically_spend"
+    path.write_text(json.dumps(preferences))
+    result = subprocess.run([sys.executable, str(package / "scripts/validate-skill-package.py")],
+                            text=True, capture_output=True, check=False)
+    assert result.returncode == 2
+    assert "project preferences example is invalid" in result.stderr

@@ -76,10 +76,15 @@ def drifter(scenario: str, stage: str) -> None:
         storage = Path("src/ledger/storage.py").read_text(encoding="utf-8")
         write("src/ledger/storage.py", "".join(f"# refactor note {i}\n" for i in range(1, 91)) + storage)
         write("docs/STATUS.md", "# Status\nEverything done.\n")
+        # A semantic scope violation, not an arbitrary line-count violation.
+        plan = Path("docs/PLAN.md").read_text(encoding="utf-8")
+        write("docs/PLAN.md", plan.replace("REQ-5.1", "Removed export from approved scope"))
     elif scenario == "b4":
         reference("b4", stage)
         write(".claude/project-control.json", '{"plan_revision": 4}\n')
         write("docs/WP-6.1.md", "# WP-6.1 currency label\n")
+        plan = Path("docs/PLAN.md").read_text(encoding="utf-8")
+        write("docs/PLAN.md", plan.replace("REQ-5.1", "Removed export from approved scope"))
 
 
 def main() -> None:

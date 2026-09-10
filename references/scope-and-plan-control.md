@@ -1,6 +1,6 @@
 # Scope and Plan Control Reference
 
-Load for Planned/High-Risk/multi-milestone work, deep detours, roadmap modifications, parallel workstreams, or suspected drift.
+Load when structured Control Mode is justified by dependencies, parallel ownership, material roadmap changes, or automated guards. Short planned work can use the project's existing checklist/status without this schema. These controls preserve useful state; they are not a requirement to create another copy of it.
 
 ## 1. Control invariants
 
@@ -129,6 +129,8 @@ When implementation exposes new work:
 ## 7. Plan Delta
 
 A Plan Delta changes the active plan lineage; it does not erase history.
+
+Synchronizing wording contradicted by an already-authorized task is not a new Plan Delta by itself. Correct only the relevant requirement, preserve unrelated invariants, and follow explicit project change-record rules. Material changes to requirements or roadmap still use the revision model above; existing user authorization can supply the approving decision. Do not ask for the same decision twice.
 
 Record:
 - ID

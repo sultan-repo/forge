@@ -1,8 +1,8 @@
 """Forge project readiness preflight.
 
-The preflight separates durable project execution preferences from local
-credential choices, verifies the local Claude/Codex environment, and can make
-small live no-edit probes before substantial work begins.
+This optional command checks prerequisites for requested external execution.
+It does not gate work in an already running agent session. Configuration and
+provider calls are opt-in; existing explicit project policies remain binding.
 """
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,24 @@ EXECUTION_MODES = {"adaptive", "claude_only", "dual_agent"}
 CODEX_POLICIES = {"never", "explicit", "high_risk", "substantial"}
 AUTH_MODES = {"subscription", "api", "inherit"}
 REQUIRED_CODEX_FLAGS = ("--config", "--ignore-user-config", "--ignore-rules")
+DEFAULT_PROJECT: dict[str, Any] = {
+    "version": 1,
+    "execution_mode": "adaptive",
+    "claude_model_policy": "current_cli",
+    "codex_review_policy": "explicit",
+    "live_preflight_required": False,
+}
+DEFAULT_LOCAL: dict[str, Any] = {"version": 1, "claude_authentication": "inherit"}
+
+
+def codex_is_required(project: dict[str, Any], task: str, review: bool) -> bool:
+    """Resolve the requested operation without requiring unused providers."""
+    policy = project["codex_review_policy"]
+    return (
+        review
+        or (policy == "high_risk" and task == "high_risk")
+        or (policy == "substantial" and task in {"planned", "high_risk"})
+    )
 
 
 def utc_now() -> str:
@@ -44,6 +63,17 @@ def repo_root(start: Path) -> Path:
     return Path(completed.stdout.strip()).resolve()
 
 
+def project_file(root: Path, relative: Path) -> Path:
+    """Keep local configuration and reports in their intended project boundary."""
+    path = root.resolve() / relative
+    boundary = root.resolve() / RUNTIME_DIR if relative.is_relative_to(RUNTIME_DIR) else root.resolve()
+    try:
+        path.resolve().relative_to(boundary)
+    except (ValueError, OSError, RuntimeError) as exc:
+        raise RuntimeError("Forge preflight paths must stay inside the project; inspect symbolic links.") from exc
+    return path
+
+
 def read_json(path: Path) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -58,9 +88,14 @@ def read_json(path: Path) -> dict[str, Any]:
 
 def atomic_json(path: Path, value: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    temporary.replace(path)
+    descriptor, name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    temporary = Path(name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(json.dumps(value, indent=2, sort_keys=True) + "\n")
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def ensure_runtime_excluded(root: Path) -> None:
@@ -171,9 +206,9 @@ def configure(root: Path) -> int:
         codex_policy = choose(
             "When should Forge require independent Codex review?",
             [
+                ("explicit", "Only when I explicitly request Codex review"),
                 ("high_risk", "High-risk work only"),
                 ("substantial", "Every substantial planned/high-risk implementation"),
-                ("explicit", "Only when I explicitly request Codex review"),
                 ("never", "Never"),
             ],
         )
@@ -185,7 +220,7 @@ def configure(root: Path) -> int:
             ("inherit", "Inherit whatever the current shell/CLI uses"),
         ],
     )
-    live_required = yes_no("Require a successful live Claude/Codex readiness probe before substantial work?", True)
+    live_required = yes_no("Require a separate live probe before external execution (uses model allowance)?", False)
     project = {
         "version": 1,
         "execution_mode": execution,
@@ -197,11 +232,11 @@ def configure(root: Path) -> int:
     validate_project_preferences(project)
     validate_local_preferences(local)
     ensure_runtime_excluded(root)
-    atomic_json(root / PROJECT_PREFS, project)
-    atomic_json(root / LOCAL_PREFS, local)
+    atomic_json(project_file(root, PROJECT_PREFS), project)
+    atomic_json(project_file(root, LOCAL_PREFS), local)
     print(f"Saved project preferences: {PROJECT_PREFS}")
     print("Saved local authentication preference under .claude/forge/runtime (not for commit).")
-    print("Run `scripts/forge preflight --live` before substantial implementation.")
+    print("Use `scripts/forge preflight` to check external execution prerequisites without a model request.")
     return 0
 
 
@@ -235,7 +270,8 @@ def version_of(binary: str, cwd: Path) -> str | None:
     result = command_result([binary, "--version"], cwd)
     if result.returncode != 0:
         return None
-    return (result.stdout.strip() or result.stderr.strip()).splitlines()[0][:200]
+    lines = (result.stdout.strip() or result.stderr.strip()).splitlines()
+    return lines[0][:200] if lines else None
 
 
 def collect_models(value: object) -> list[str]:
@@ -268,7 +304,7 @@ def prior_live_is_reusable(
     codex_version: str | None,
     api_override: bool,
 ) -> bool:
-    if not prior or prior.get("status") != "READY" or prior.get("live_verified") is not True:
+    if not prior or prior.get("version") != 2 or prior.get("blockers") or prior.get("live_verified") is not True:
         return False
     if prior.get("preferences_sha256") != digest:
         return False
@@ -282,20 +318,51 @@ def prior_live_is_reusable(
     )
 
 
-def evaluate(root: Path, *, live: bool) -> tuple[str, dict[str, Any], list[str], list[str]]:
+def claude_probe_succeeded(stdout: str) -> tuple[bool, list[str]]:
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError:
+        return False, []
+    valid = (
+        isinstance(payload, dict)
+        and payload.get("is_error") is False
+        and isinstance(payload.get("result"), str)
+        and payload["result"].strip() == "FORGE_CLAUDE_READY"
+        and payload.get("subtype", "success") == "success"
+    )
+    return valid, collect_models(payload) if valid else []
+
+
+def codex_probe_succeeded(stdout: str) -> bool:
+    completed = False
+    answer = False
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            return False
+        if not isinstance(event, dict) or event.get("type") in {"error", "turn.failed"}:
+            return False
+        if event.get("type") == "turn.completed":
+            completed = True
+        if event.get("type") == "item.completed":
+            item = event.get("item")
+            if isinstance(item, dict) and item.get("type") == "agent_message":
+                value = item.get("text")
+                answer = isinstance(value, str) and value.strip() == "FORGE_CODEX_READY"
+    return completed and answer
+
+
+def evaluate(
+    root: Path, *, live: bool, task: str = "planned", review: bool = False,
+) -> tuple[str, dict[str, Any], list[str], list[str]]:
     blockers: list[str] = []
     warnings: list[str] = []
-    project_path = root / PROJECT_PREFS
-    local_path = root / LOCAL_PREFS
-    if not project_path.exists():
-        blockers.append("Project preferences are missing. Run `scripts/forge preflight --configure` or `/forge preflight`.")
-        return "BLOCKED", {}, blockers, warnings
-    if not local_path.exists():
-        blockers.append("Local authentication preference is missing. Run preflight configuration on this machine.")
-        return "BLOCKED", {}, blockers, warnings
+    project_path = project_file(root, PROJECT_PREFS)
+    local_path = project_file(root, LOCAL_PREFS)
     try:
-        project = read_json(project_path)
-        local = read_json(local_path)
+        project = read_json(project_path) if project_path.exists() else DEFAULT_PROJECT.copy()
+        local = read_json(local_path) if local_path.exists() else DEFAULT_LOCAL.copy()
         validate_project_preferences(project)
         validate_local_preferences(local)
     except (RuntimeError, TypeError) as exc:
@@ -303,7 +370,7 @@ def evaluate(root: Path, *, live: bool) -> tuple[str, dict[str, Any], list[str],
         return "BLOCKED", {}, blockers, warnings
 
     claude_version = version_of("claude", root)
-    codex_needed = project["codex_review_policy"] != "never"
+    codex_needed = codex_is_required(project, task, review)
     codex_version = version_of("codex", root) if codex_needed else None
     api_override = bool(os.environ.get("ANTHROPIC_API_KEY"))
     auth_mode = local["claude_authentication"]
@@ -337,15 +404,18 @@ def evaluate(root: Path, *, live: bool) -> tuple[str, dict[str, Any], list[str],
             if help_result.returncode != 0 or any(flag not in help_text for flag in REQUIRED_CODEX_FLAGS):
                 blockers.append("Codex CLI is too old for Forge's isolated high-reasoning reviewer mode.")
 
-    digest = preferences_digest(project, local)
+    digest = preferences_digest({**project, "requested_task": task, "requested_review": review}, local)
     prior: dict[str, Any] | None = None
     try:
-        if (root / REPORT).exists():
-            prior = read_json(root / REPORT)
+        report_path = project_file(root, REPORT)
+        if report_path.exists():
+            prior = read_json(report_path)
     except (RuntimeError, TypeError):
         prior = None
-    live_verified = prior_live_is_reusable(prior, digest, claude_version, codex_version, api_override)
-    models: list[str] = []
+    live_verified = not blockers and prior_live_is_reusable(prior, digest, claude_version, codex_version, api_override)
+    prior_environment = prior.get("environment", {}) if prior and live_verified else {}
+    models: list[str] = prior_environment.get("claude_models_reported", [])
+    live_checked_at = prior.get("live_checked_at") if prior and live_verified else None
 
     if not blockers and live:
         env = os.environ.copy()
@@ -360,22 +430,21 @@ def evaluate(root: Path, *, live: bool) -> tuple[str, dict[str, Any], list[str],
                 "json",
                 "--max-turns",
                 "1",
+                "--tools",
+                "",
+                "--disable-slash-commands",
+                "--strict-mcp-config",
+                "--settings",
+                '{"disableAllHooks":true}',
+                "--no-session-persistence",
             ],
             root,
             env=env,
             timeout=120,
         )
-        if claude.returncode != 0:
-            blockers.append("Live Claude readiness probe failed: " + (claude.stderr.strip() or claude.stdout.strip())[-300:])
-        else:
-            try:
-                payload = json.loads(claude.stdout)
-            except json.JSONDecodeError:
-                payload = None
-            if isinstance(payload, dict) and payload.get("is_error") is True:
-                blockers.append("Live Claude readiness probe returned a provider error.")
-            if payload is not None:
-                models = collect_models(payload)
+        probe_ok, models = claude_probe_succeeded(claude.stdout)
+        if claude.returncode != 0 or not probe_ok:
+            blockers.append("Live Claude readiness probe did not return the expected successful response. Check CLI authentication and provider availability.")
         if codex_needed and not blockers:
             codex = command_result(
                 [
@@ -399,17 +468,21 @@ def evaluate(root: Path, *, live: bool) -> tuple[str, dict[str, Any], list[str],
                 stdin="Reply with exactly FORGE_CODEX_READY and do not modify or inspect project files.",
                 timeout=120,
             )
-            if codex.returncode != 0:
-                blockers.append("Live Codex high-reasoning readiness probe failed: " + (codex.stderr.strip() or codex.stdout.strip())[-300:])
+            if codex.returncode != 0 or not codex_probe_succeeded(codex.stdout):
+                blockers.append("Live Codex readiness probe did not complete with the expected response. Check CLI authentication and provider availability.")
         live_verified = not blockers
+        live_checked_at = utc_now() if live_verified else None
 
     if not blockers and project["live_preflight_required"] and not live_verified:
-        warnings.append("A live readiness probe is required before substantial work. Run `scripts/forge preflight --live`.")
+        blockers.append("Project policy requires a live probe before this external execution. Run `scripts/forge preflight --live` with the same --task/--review options.")
 
     status = "BLOCKED" if blockers else ("READY_WITH_WARNINGS" if warnings else "READY")
     report = {
-        "version": 1,
+        "version": 2,
         "checked_at": utc_now(),
+        "live_checked_at": live_checked_at,
+        "requested_operation": {"task": task, "review": review},
+        "preferences_source": {"project": "file" if project_path.exists() else "default", "local": "file" if local_path.exists() else "default"},
         "status": status,
         "live_verified": live_verified,
         "preferences_sha256": digest,
@@ -454,7 +527,9 @@ def print_report(status: str, report: dict[str, Any], blockers: list[str], warni
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="forge preflight", description="Verify Forge project execution readiness")
     parser.add_argument("--configure", action="store_true", help="ask the project setup questions and save preferences")
-    parser.add_argument("--live", action="store_true", help="make minimal live Claude/Codex no-edit readiness probes")
+    parser.add_argument("--live", action="store_true", help="opt in to model requests for readiness probes (uses allowance)")
+    parser.add_argument("--task", choices=("quick", "planned", "high_risk"), default="planned", help="scope configured external review policy to this task")
+    parser.add_argument("--review", action="store_true", help="check explicitly requested external Codex review")
     parser.add_argument("--json", action="store_true", help="print the readiness report as JSON")
     return parser
 
@@ -466,9 +541,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.configure:
             return configure(root)
         ensure_runtime_excluded(root)
-        status, report, blockers, warnings = evaluate(root, live=args.live)
+        status, report, blockers, warnings = evaluate(root, live=args.live, task=args.task, review=args.review)
         if report:
-            atomic_json(root / REPORT, report)
+            atomic_json(project_file(root, REPORT), report)
         if args.json:
             print(json.dumps(report or {"status": status, "blockers": blockers, "warnings": warnings}, indent=2))
         else:

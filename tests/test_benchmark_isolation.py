@@ -24,7 +24,8 @@ def docker_available() -> bool:
 
 
 @pytest.mark.skipif(not docker_available(), reason="Docker is required for scorer isolation test")
-def test_benchmark_scoring_cannot_write_outside_candidate(tmp_path: Path) -> None:
+@pytest.mark.parametrize("hook_failure", [False, True])
+def test_benchmark_scoring_cannot_write_outside_candidate(tmp_path: Path, hook_failure: bool) -> None:
     fixtures = tmp_path / "fixtures"
     subprocess.run([sys.executable, str(CORE / "build_fixtures.py"), "--out", str(fixtures), "b4"], check=True)
     source = fixtures / "b4"
@@ -37,8 +38,13 @@ def test_benchmark_scoring_cannot_write_outside_candidate(tmp_path: Path) -> Non
         "from pathlib import Path\n"
         f"SENTINEL = Path({str(sentinel)!r})\n"
         "def pytest_sessionstart(session):\n"
-        "    SENTINEL.parent.mkdir(parents=True, exist_ok=True)\n"
-        "    SENTINEL.write_text('escaped', encoding='utf-8')\n",
+        "    try:\n"
+        "        SENTINEL.parent.mkdir(parents=True, exist_ok=True)\n"
+        "        SENTINEL.write_text('escaped', encoding='utf-8')\n"
+        "    except OSError:\n"
+        "        pass\n"
+        f"    if {hook_failure!r}:\n"
+        "        raise RuntimeError('deliberate candidate hook failure')\n",
         encoding="utf-8",
     )
     tests = repo / "tests"
@@ -118,7 +124,12 @@ def test_benchmark_scoring_cannot_write_outside_candidate(tmp_path: Path) -> Non
     payload = json.loads(completed.stdout)
     assert payload["scenario"] == "b4"
     assert payload["assertions"]["required_requirements_pass"]
-    assert not payload["pass"], "candidate hook errors must fail visible tests"
+    assert payload["visible_tests"]["green"] is not hook_failure
+    assert payload["pass"] is not hook_failure, "only the deliberate hook error should fail visible tests"
+    if not hook_failure:
+        assert payload["visible_tests"]["passed"] > 0, "visible checks, including the secret-environment test, must execute"
+    # A Linux host's /tmp path may also exist in the container's private tmpfs.
+    # Such a write is harmless; the host path must remain absent in both cases.
     assert not sentinel.exists(), "candidate pytest hook escaped the scoring container"
 
 

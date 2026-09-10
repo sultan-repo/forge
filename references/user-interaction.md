@@ -14,6 +14,8 @@ Use progressive disclosure: provide the result first, then expand only when the 
 
 Ask the smallest question that resolves the material uncertainty. Use user-domain language rather than Forge terminology.
 
+Reuse authorization and preferences already supplied. A request to fix a scoped issue authorizes the necessary reversible investigation, edits, and checks; merely touching a sensitive file does not create a second permission requirement. Ask when the actual consequential action exceeds that authority. Setup questions and live external-agent checks do not belong in ordinary current-session work.
+
 Prefer:
 
 > This changes how login security works. Do you want to proceed?
@@ -41,6 +43,8 @@ A normal successful result can be as short as:
 > Done. It was implemented, tested, and independently reviewed.
 
 Detailed evidence remains available on request.
+
+Use that completion example only when the implementation, tests, and independent review actually occurred. Otherwise state the checks performed and material limits. A recorded task status alone is not evidence of completion.
 
 ## Review abstraction
 

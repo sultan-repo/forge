@@ -15,6 +15,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from assert_run import CRITERIA_VERSION
+
 SCORER_ROOT = Path("/scorer")
 INPUT_REPO = Path("/input")
 WORK_ROOT = Path("/work")
@@ -70,6 +72,8 @@ def build_command(args: argparse.Namespace) -> list[str]:
 def validate_result(payload: object, scenario: str, phase: str) -> None:
     if not isinstance(payload, dict) or payload.get("scenario") != scenario:
         raise ValueError("isolated scorer result has the wrong scenario")
+    if payload.get("criteria_version") != CRITERIA_VERSION:
+        raise ValueError("isolated scorer result has the wrong criteria version")
     if phase == "stage1" and payload.get("phase") != "stage1":
         raise ValueError("isolated scorer result has the wrong phase")
     assertions = payload.get("assertions")

@@ -11,69 +11,39 @@ status      inspect one packet's execution/review state
 
 The methodology remains usable without the shell runner. `/forge preflight`, `/forge new`, `/forge adopt`, `/forge continue`, `/forge review`, and `/forge status` are Claude Code skill flows; the shell executable is an optional local execution helper.
 
-## Project preflight
+## Optional external execution preflight
 
-For Planned or High-Risk work, run preflight before relying on the local agent setup:
+Work in the current agent session needs no extra readiness gate. Before requested external execution, local diagnostics are available without model requests or first-use configuration:
 
 ```bash
 FORGE_DIR="$HOME/.claude/skills/forge"
-"$FORGE_DIR/scripts/forge" preflight --configure
-"$FORGE_DIR/scripts/forge" preflight --live
+"$FORGE_DIR/scripts/forge" preflight --review
 ```
 
-Interactive configuration asks only choices that materially affect execution:
+Use `--task quick`, `--task planned` (default), or `--task high_risk` to apply a saved task-specific review policy. `--review` explicitly checks Codex. Missing preferences default to adaptive execution, explicit-only review, inherited authentication, and no required live probe. No preference file is created implicitly.
 
-- adaptive / Claude-only / dual-agent execution
-- whether the current Claude Code model selection is acceptable
-- when Codex review should be required
-- local Claude authentication intent: subscription / API key / inherit
-- whether live readiness must be proven before substantial work
+`preflight --configure` optionally saves durable choices in `.claude/forge/project-preferences.json` and local authentication intent in `.claude/forge/runtime/local-preferences.json`. Existing user choices should be reused. See [the preference example](../templates/project-preferences.example.json), [schema](../templates/project-preferences.schema.json), and [full preflight reference](../references/project-preflight.md).
 
-Durable project preferences live at:
+The helper excludes runtime files from Git locally and stores no credential values. Local reports return:
 
-```text
-.claude/forge/project-preferences.json
-```
+- `READY` (exit 0): local prerequisites and any explicitly required live evidence pass.
+- `READY_WITH_WARNINGS` (exit 1): usable prerequisites with a non-blocking warning.
+- `BLOCKED` (exit 2): the requested external route cannot proceed under its current policy.
 
-The default shape is documented in [project-preferences.example.json](../templates/project-preferences.example.json) and [its schema](../templates/project-preferences.schema.json).
-
-Authentication choice and readiness evidence are machine-local and live under:
-
-```text
-.claude/forge/runtime/local-preferences.json
-.claude/forge/runtime/preflight.json
-```
-
-The preflight helper adds `.claude/forge/runtime/` to Git's local exclude file. It never stores or prints secret values.
-
-Preflight returns:
-
-- `READY` with exit code 0: the requested execution route is usable
-- `READY_WITH_WARNINGS` with exit code 1: local checks pass, but a configured live probe or another non-fatal condition still needs attention
-- `BLOCKED` with exit code 2: the configured route must not be used yet
-
-When live verification is required, a prior successful live report can be reused only while project/local preferences, Claude/Codex CLI versions, and API-key override presence remain unchanged. If those inputs change, run `preflight --live` again.
+`--live` opts in to provider requests that use model allowance. It is never automatic. A saved `live_preflight_required: true` remains binding: run the authorized probe with the same `--task`/`--review` options before external execution. The runner checks saved preferences offline with `--review` before dispatch; a missing required probe blocks rather than secretly spending allowance.
 
 ### What live preflight verifies
 
-The live probe is deliberately tiny and no-edit:
+Claude must return the exact requested answer in a valid successful JSON result; Codex must emit that answer and a successful completed turn. Exit code zero alone is insufficient. Claude's probe disables tools, skills, MCP configuration, hooks, and session persistence. Codex uses read-only, ephemeral execution with isolated configuration and high reasoning.
 
-- Claude Code can make a real provider request with the selected local auth mode
-- subscription mode is blocked when `ANTHROPIC_API_KEY` is present, because that variable can override subscription login in non-interactive Claude Code
-- API mode is blocked when no API key is present
-- Codex sign-in and required isolated-review flags are checked whenever the project may use Codex
-- Codex receives a real read-only ephemeral request with `model_reasoning_effort="high"`
-
-Forge does not pin a transient Claude or Codex model name. The current Claude Code model selection remains the project model policy; the live report records a model ID only when the CLI actually reports one.
-
-If a project is configured for Codex review and Codex cannot be verified, preflight is `BLOCKED`. Forge must not silently downgrade that project to Claude-only execution.
+Report version 2 includes the requested operation, preference sources, observed versions/models, and original `live_checked_at`. Matching historical evidence can be reused while operation, preferences, CLI versions, and API-key override presence match. Failed local authentication invalidates it. An ordinary recheck preserves the original probe time and does not assert a new provider connection. Historical success never guarantees future provider access; no timer causes automatic reprobes. Earlier report versions are not reused as live proof.
 
 ## Prerequisites for the dual-agent runner
 
 - reviewed or verified local Forge package outside the project being implemented
 - macOS or Linux with Bash, Git, and Python 3.12+
 - project Git repository with an existing commit and configured Git identity
-- `claude` and, when review is configured, `codex` available on `PATH`
+- `claude` and `codex` available on `PATH` (this optional runner always uses both)
 - valid `.claude/project-control.json`
 - current passed Plan Consistency gate
 - active Work Packet with current revisions, completed dependencies, bounded scope, acceptance, and validation
@@ -87,14 +57,7 @@ Use Forge to establish real requirements/control state first. The default contro
 
 ```bash
 FORGE_DIR="$HOME/.claude/skills/forge"
-mkdir -p .claude/forge
-
-if [ ! -e .claude/forge/execution-profile.json ]; then
-  cp "$FORGE_DIR/templates/execution-profile.example.json" .claude/forge/execution-profile.json
-fi
-
 python3 "$FORGE_DIR/templates/validate-project-control.py" .claude/project-control.json
-"$FORGE_DIR/scripts/forge" preflight
 "$FORGE_DIR/scripts/forge" --verbose doctor
 "$FORGE_DIR/scripts/forge" run WP-1.1
 "$FORGE_DIR/scripts/forge" --verbose status WP-1.1
@@ -102,7 +65,7 @@ python3 "$FORGE_DIR/templates/validate-project-control.py" .claude/project-contr
 
 Replace `WP-1.1` with the active packet. `run` and `status` may omit the ID only when exactly one packet is active. `status WP-ID` can inspect an inactive or completed packet that remains in control state.
 
-`doctor` validates the execution profile, Claude/Codex CLI readiness, and the current Forge Work Packet. It is narrower than project preflight: use `preflight --live` when you need proof that provider/auth settings actually work before substantial execution.
+`doctor` validates the execution profile, local CLI prerequisites, and current Work Packet without a model request. It is optional; `run` performs its own checks. Use `preflight --review` to diagnose saved authentication policy, and an authorized `preflight --review --live` only when a provider probe is needed.
 
 ## Execution profile
 
@@ -123,7 +86,7 @@ For adaptive projects:
 - `explicit`: only when the user explicitly asks
 - `never`: Claude-only execution
 
-`dual_agent` means Planned and High-Risk implementation requires the runner; `claude_only` means Codex is not required.
+`dual_agent` requests Claude/Codex review for Planned and High-Risk implementation; `claude_only` does not require Codex. Calling `forge run` explicitly selects the dual-agent mechanism, including its independent reviewer.
 
 Codex review is read-only and ephemeral, ignores user/project Codex rules/configuration for isolation, leaves model selection to the current provider, and explicitly requests `high` reasoning. Unsupported reasoning fails the review instead of silently lowering effort.
 
@@ -131,7 +94,7 @@ Codex review is read-only and ephemeral, ignores user/project Codex rules/config
 
 Forge inherits the environment and authenticated CLI sessions it launches.
 
-For subscription-authenticated Claude Code, an exported `ANTHROPIC_API_KEY` can take precedence and use API billing. Preflight catches this when the project is configured for subscription use.
+For subscription-authenticated Claude Code, an exported `ANTHROPIC_API_KEY` can take precedence and use API billing. A saved local `subscription` preference blocks this conflict in preflight and before `run` dispatch. `api` requires a key; `inherit` preserves the current route and warns about an active override. Forge never silently switches billing modes or credentials.
 
 Manual checks remain useful when diagnosing a machine:
 
@@ -150,7 +113,7 @@ CLI permissions still apply after authentication succeeds. A successful login do
 
 ## What `run` changes
 
-1. Validate project state and execution preconditions.
+1. Validate project state, execution preconditions, and any saved authentication/live-probe policy using local checks.
 2. Ask Claude Code to implement the packet and run relevant checks.
 3. Preserve implementation evidence and create a local Git checkpoint with `git add -A`.
 4. Review the immutable checkpoint in a temporary detached worktree with Codex's read-only sandbox.
@@ -186,7 +149,7 @@ For interruption or temporary CLI failure:
 
 1. inspect `status WP-ID`, the Git diff, and the saved reason
 2. fix the environment/auth issue or preserve/restore the intended checkpoint
-3. rerun preflight if CLI/auth/preferences changed
+3. check saved external preferences with `preflight --review` if CLI/auth/preferences changed; authorize a new live probe only if needed
 4. rerun `run WP-ID`
 
 Interrupted implementation can execute again because Forge cannot prove what an incomplete external process finished. Tests/migrations should tolerate the intended retry or be reconciled before resuming.

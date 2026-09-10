@@ -22,7 +22,7 @@ Use a native plan/read-only mode when available for investigation and architectu
 
 Forge adds requirements readiness, objective/requirement traceability, Plan Consistency, and explicit authority for material plan changes.
 
-Fallback: perform the same planning discipline in the main session without edits until planning is approved.
+Fallback: investigate and plan in the main session. An existing user request may already authorize implementation; wait only for a material missing decision or when the user explicitly requested a planning-only phase.
 
 ## Task/work-item capability
 

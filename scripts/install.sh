@@ -4,15 +4,18 @@ set -euo pipefail
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEST_DIR="${CLAUDE_SKILLS_DIR:-$HOME/.claude/skills}/forge"
 
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "Forge installation requires Python 3 to validate the package; the existing installation was not changed." >&2
+  exit 2
+fi
+
 mkdir -p "$(dirname "$DEST_DIR")"
 
 SOURCE_REAL="$(cd "$SOURCE_DIR" && pwd -P)"
 DEST_REAL="$(cd "$(dirname "$DEST_DIR")" && pwd -P)/$(basename "$DEST_DIR")"
 
 if [ "$SOURCE_REAL" = "$DEST_REAL" ]; then
-  if command -v python3 >/dev/null 2>&1; then
-    python3 "$SOURCE_DIR/scripts/validate-skill-package.py"
-  fi
+  python3 "$SOURCE_DIR/scripts/validate-skill-package.py"
   echo "Forge is already installed at $DEST_DIR"
   exit 0
 fi
@@ -55,11 +58,7 @@ find "$STAGING_DIR" -type f -name '*.pyc' -delete
 rm -rf "$STAGING_DIR/evals/core/build" "$STAGING_DIR/evals/core/results"
 rm -f "$STAGING_DIR/evals/core/fixture_bundle.json"
 
-if command -v python3 >/dev/null 2>&1; then
-  python3 "$STAGING_DIR/scripts/validate-skill-package.py"
-else
-  echo "Forge package validation skipped: Python is unavailable." >&2
-fi
+python3 "$STAGING_DIR/scripts/validate-skill-package.py"
 
 if [[ -e "$DEST_DIR" || -L "$DEST_DIR" ]]; then
   BACKUP="$(mktemp -d "${DEST_DIR}.backup.XXXXXX")"

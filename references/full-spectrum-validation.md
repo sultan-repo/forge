@@ -2,6 +2,8 @@
 
 Use for project inception/redefinition, major architecture/operating-model changes, repeated systemic failures, major milestones, production readiness, major releases, or explicit maximum-depth review.
 
+For a focused `/forge review`, limit these questions to the requested change and relevant risks. Do not expand a patch review into a complete business, architecture, and operations review merely because this reference lists those domains.
+
 Purpose: determine whether the project remains the strongest practical path to the ultimate objective, not merely whether current code is clean.
 
 ## Evidence base

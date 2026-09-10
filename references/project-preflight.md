@@ -1,104 +1,49 @@
-# Project preflight
+# Optional external execution preflight
 
-Forge project preflight prevents a substantial project from discovering too late that its intended Claude/Codex/authentication path was never actually ready.
+Use preflight when the task will launch an external Claude/Codex CLI or when diagnosing that route. Work in the current agent session, including planned work and resume, does not need another login check, preference file, or model request.
 
-## When it applies
-
-Planned, High-Risk, and multi-milestone work should complete preflight before significant implementation. Quick reversible tasks may skip persistent preflight unless they depend on an external agent.
-
-## First-use questions
-
-If `.claude/forge/project-preferences.json` is missing, ask only the choices that change execution:
-
-1. **Execution mode**
-   - `adaptive` (recommended): Claude normally; Codex according to review policy
-   - `claude_only`: never require Codex
-   - `dual_agent`: Planned and High-Risk implementation requires Claude + Codex
-
-2. **Claude model**
-   - confirm the current Claude Code model selection is acceptable
-   - Forge does not maintain a hardcoded model catalog
-   - if the user wants a different model, change/select it in Claude Code before completing preflight
-
-3. **Codex review policy** when adaptive
-   - `high_risk` (recommended)
-   - `substantial`
-   - `explicit`
-   - `never`
-
-4. **Local Claude authentication intent**
-   - `subscription` (recommended for subscription users)
-   - `api`
-   - `inherit`
-
-5. **Live readiness**
-   - recommend requiring a small live no-edit probe before substantial implementation
-
-Keep durable project execution/review choices in `.claude/forge/project-preferences.json`. Authentication choice and live evidence are machine-local under `.claude/forge/runtime/` and should not be committed.
-
-The bundled example is `templates/project-preferences.example.json`; the schema is `templates/project-preferences.schema.json`.
-
-## Execution routing
-
-| Project setting | Route |
-| --- | --- |
-| `claude_only` | Claude only |
-| `dual_agent` | Claude + Codex for Planned/High-Risk implementation |
-| `adaptive` + `substantial` | Codex review for Planned/High-Risk implementation |
-| `adaptive` + `high_risk` | Codex review for High-Risk implementation only |
-| `adaptive` + `explicit` | Codex only when the user explicitly requests it |
-| `adaptive` + `never` | Claude only |
-
-Codex review uses the provider-selected model, read-only execution, and Forge-requested `high` reasoning. Do not silently downgrade a route that the project requires.
-
-## Readiness states
-
-- `READY`: the requested route is verified.
-- `READY_WITH_WARNINGS`: local checks are usable, but a configured live probe or another non-fatal condition still needs attention. When live verification is required, substantial implementation waits.
-- `BLOCKED`: resolve the blocker before substantial implementation.
-
-## Local shell helper
+## Start with the requested operation
 
 ```bash
-scripts/forge preflight --configure
-scripts/forge preflight --live
-scripts/forge preflight --json
+scripts/forge preflight                         # local checks; planned task by default
+scripts/forge preflight --task high_risk        # include configured high-risk review
+scripts/forge preflight --review                # explicitly requested Codex review
+scripts/forge preflight --json                  # machine-readable report
 ```
 
-`--configure` is interactive. When Claude Code is driving Forge, it may ask the same questions itself and write the preferences instead of requiring terminal interaction.
+These commands check local CLI/authentication prerequisites without a model request. Missing preference files use adaptive execution, explicit-only Codex review, inherited authentication, and no required live probe. They do not create preference files or initiate a setup interview. Preflight only checks readiness; it does not dispatch implementation or silently downgrade a required reviewer.
 
-`--live` performs minimal no-edit provider probes. It checks:
+| Saved review policy | Codex checked when |
+| --- | --- |
+| `never` | explicitly requested with `--review` |
+| `explicit` | explicitly requested with `--review` |
+| `high_risk` | `--task high_risk` or `--review` |
+| `substantial` | planned/high-risk tasks or `--review` |
 
-- Claude CLI availability
-- configured Claude authentication intent
-- API-key override conflicts without printing secret values
-- a real Claude provider request
-- Codex installation/sign-in/required isolated-review flags when the project may use Codex
-- a real Codex read-only ephemeral request with `model_reasoning_effort="high"`
+`claude_only` requires saved policy `never`; `dual_agent` requires `substantial`. An explicit `forge run` selects the dual-agent runner and checks saved preferences with `--review` before dispatch. Native independent review is also possible without that runner.
 
-For `subscription`, an active `ANTHROPIC_API_KEY` is `BLOCKED` because it can override subscription authentication in non-interactive Claude Code. For `api`, a missing API key is `BLOCKED`. `inherit` reports an active API override as a warning rather than guessing which billing mode the user intended.
+## Save preferences only when useful
 
-## Reusing live readiness
+`preflight --configure` is an optional interactive helper. Preserve choices and authorizations already provided by the user. Ask only about a missing choice that affects the requested external operation; do not repeat a questionnaire to continue a task.
 
-A prior `READY` live report may be reused only while these remain unchanged:
+Durable choices use `.claude/forge/project-preferences.json` ([example](../templates/project-preferences.example.json), [schema](../templates/project-preferences.schema.json)). Authentication intent is machine-local in `.claude/forge/runtime/local-preferences.json`. The helper excludes runtime files from Git locally and does not store credential values.
 
-- durable and local preference content
-- Claude CLI version
-- Codex CLI version when Codex may be used
-- presence/absence of the Anthropic API-key override
+- `subscription`: block an active `ANTHROPIC_API_KEY` override. Resolve the environment explicitly; never fall back to API billing.
+- `api`: require an API key.
+- `inherit`: preserve the shell/CLI choice; warn if an API override is active.
 
-Otherwise refresh with `scripts/forge preflight --live`.
+Forge leaves model selection to the CLIs; it does not maintain a changing model catalog.
 
-The live report may record model names only when the CLI actually reports them. Never infer missing model identity.
+## Live probes are opt-in
 
-## Continuing a project
+`preflight --live` makes model requests and uses subscription allowance or API billing according to the selected authentication. Use it only when requested or authorized under an explicit saved requirement. Keep the same `--task`/`--review` options as the intended operation. A configured `live_preflight_required: true` blocks external readiness until successful matching evidence exists; ordinary preflight never starts a probe automatically.
 
-On `/forge continue`:
+The Claude probe disables built-in tools, skills, MCP configuration, hooks, and session persistence. Codex runs read-only and ephemeral with isolated configuration and high reasoning. A zero exit code alone is insufficient: Claude must return a valid successful JSON result with the expected answer; Codex must emit the expected answer and a completed turn without an error. Unsupported flags or provider failures remain failures.
 
-1. restore project state and prior readiness evidence
-2. run a cheap local preflight check when Planned/High-Risk work will continue
-3. reuse prior live verification only when the environment fingerprint still matches
-4. rerun live verification when it does not
-5. stop rather than silently changing the project's execution/review route
+## Read the result precisely
 
-User-facing output should normally be a short readiness summary. Show detailed environment evidence only when requested or when a blocker needs explanation.
+- `READY` (exit 0): local prerequisites pass, plus any explicitly required live evidence.
+- `READY_WITH_WARNINGS` (exit 1): prerequisites pass with a non-blocking warning, such as inherited API authentication.
+- `BLOCKED` (exit 2): the requested external route has an unresolved prerequisite or policy requirement. This does not block unrelated work in the current session.
+
+Report version 2 records operation, preference sources, observed versions/models, and `live_checked_at`. A cached successful probe is historical evidence, not a guarantee that a future provider request will work. Reuse it only with matching operation, preferences, CLI versions, and API-override presence; failed local authentication invalidates it. Ordinary rechecks preserve the original probe time and reported model. Old report versions are not accepted as live proof because they used weaker validation. There is no timer that automatically spends allowance on another probe.

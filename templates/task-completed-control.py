@@ -7,6 +7,7 @@ ID. If no Work Packet is referenced, the hook stays out of the way.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -15,6 +16,7 @@ from typing import Any
 
 JsonObject = dict[str, Any]
 WORK_PACKET_PATTERN = re.compile(r"\b(WP-[A-Za-z0-9._-]+)\b")
+ITEM_STATUSES = {"planned", "in_progress", "blocked", "done", "deferred", "cancelled", "superseded"}
 COMPLETED_STATUSES = {"passed", "satisfied", "accepted", "complete", "completed"}
 
 
@@ -43,11 +45,16 @@ def read_json_object(path: Path) -> JsonObject | None:
 
 def review_state(cwd: Path, packet_id: str, packet: JsonObject) -> JsonObject | None:
     """Resolve review state without making dual-agent runtime state canonical project truth."""
+    execution = packet.get("execution")
+    if "execution" in packet:
+        if not isinstance(execution, dict):
+            return {"phase": "invalid"}
+        if "review_required" in execution and type(execution["review_required"]) is not bool:
+            return {"phase": "invalid"}
     runtime_path = cwd / ".claude" / "forge" / "runtime" / "executions" / f"{packet_id}.json"
     if runtime_path.exists():
         # A malformed recovery record must not silently downgrade required review.
         return read_json_object(runtime_path) or {"phase": "invalid"}
-    execution = packet.get("execution")
     if isinstance(execution, dict):
         profile = execution.get("profile")
         phase = execution.get("phase")
@@ -80,7 +87,7 @@ def approval_matches_project(cwd: Path, state: JsonObject, execution: JsonObject
     try:
         ancestor = subprocess.run(
             ["git", "merge-base", "--is-ancestor", reviewed, "HEAD"],
-            cwd=cwd, capture_output=True, check=False,
+            cwd=cwd, capture_output=True, check=False, timeout=5,
         )
         if ancestor.returncode != 0:
             return False
@@ -89,13 +96,13 @@ def approval_matches_project(cwd: Path, state: JsonObject, execution: JsonObject
             ["git", "diff", "--cached", "--no-renames", "--name-only", "-z", reviewed, "--"],
             ["git", "ls-files", "--others", "--exclude-standard", "-z"],
         ):
-            completed = subprocess.run(command, cwd=cwd, capture_output=True, check=False)
+            completed = subprocess.run(command, cwd=cwd, capture_output=True, check=False, timeout=5)
             if completed.returncode != 0:
                 return False
             paths = completed.stdout.split(b"\0")
             if any(path and path != b".claude/project-control.json" and not path.startswith(b".claude/forge/runtime/") for path in paths):
                 return False
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         return False
     return True
 
@@ -104,12 +111,11 @@ def main() -> int:
     """Hook entry point."""
     event = read_event()
     text = " ".join(str(event.get(key) or "") for key in ("task_subject", "task_description"))
-    match = WORK_PACKET_PATTERN.search(text)
-    if match is None:
+    packet_ids = list(dict.fromkeys(WORK_PACKET_PATTERN.findall(text)))
+    if not packet_ids:
         return 0
 
-    packet_id = match.group(1)
-    cwd = Path(str(event.get("cwd") or "."))
+    cwd = Path(os.environ.get("CLAUDE_PROJECT_DIR") or str(event.get("cwd") or "."))
     state_path = cwd / ".claude" / "project-control.json"
     validator_candidates = (
         cwd / ".claude" / "hooks" / "validate-project-control.py",
@@ -117,28 +123,50 @@ def main() -> int:
     )
 
     if not state_path.exists():
-        return fail(f"Forge: task references {packet_id}, but {state_path} is missing.")
+        return fail(f"Forge: task references {', '.join(packet_ids)}, but {state_path} is missing.")
 
     state_value = read_json_object(state_path)
     if state_value is None:
         return fail("Forge: cannot parse project control state as a JSON object.")
 
-    packet_map = state_value.get("work_packets", {})
-    packet = packet_map.get(packet_id) if isinstance(packet_map, dict) else None
-    if not isinstance(packet, dict):
-        return fail(f"Forge: task references unknown Work Packet {packet_id}.")
-
     validator = next((path for path in validator_candidates if path.exists()), None)
     if validator is not None:
-        completed = subprocess.run(
-            [sys.executable, str(validator), str(state_path)],
-            capture_output=True,
-            check=False,
-            text=True,
-        )
+        try:
+            completed = subprocess.run(
+                [sys.executable, str(validator), str(state_path)],
+                capture_output=True,
+                check=False,
+                text=True,
+                timeout=5,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return fail(f"Forge: cannot validate control state before completion ({type(exc).__name__}).")
         if completed.returncode != 0:
             detail = (completed.stderr or completed.stdout).strip()
-            return fail(f"Forge: control state invalid before completing {packet_id}: {detail}")
+            return fail(f"Forge: control state invalid before completion: {detail}")
+
+    packet_map = state_value.get("work_packets", {})
+    for packet_id in packet_ids:
+        packet = packet_map.get(packet_id) if isinstance(packet_map, dict) else None
+        if not isinstance(packet, dict):
+            return fail(f"Forge: task references unknown Work Packet {packet_id}.")
+        result = validate_completion(cwd, state_value, packet_id, packet)
+        if result:
+            return result
+    return 0
+
+
+def validate_completion(cwd: Path, state_value: JsonObject, packet_id: str, packet: JsonObject) -> int:
+    """Check every referenced packet, including when no full validator is installed."""
+    status = packet.get("status")
+    if not isinstance(status, str) or status not in ITEM_STATUSES:
+        return fail(f"Forge: {packet_id} has an invalid status; reconcile before completion.")
+    if status in {"deferred", "cancelled", "superseded"}:
+        return fail(f"Forge: {packet_id} is {status}; it cannot be reported as completed work.")
+    for key in ("baseline_revision", "plan_revision"):
+        revision = packet.get(key)
+        if type(revision) is not int or revision < 1 or type(state_value.get(key)) is not int or revision != state_value[key]:
+            return fail(f"Forge: {packet_id} has a stale or invalid {key}; reconcile before completion.")
 
     execution = review_state(cwd, packet_id, packet)
     if execution is not None:
