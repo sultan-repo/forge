@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+Benchmark reliability and evaluation-boundary repair:
+
+- adds native three-arm pilot manifests, session reservations and invocation ceilings, explicit pause/resume, bounded infrastructure retries, and offline recovery before reruns
+- freezes runtime package contents, model and image identities, scorer sources, and network policy; stops when required identities disagree
+- isolates agent networking behind a provider-only socket proxy and disables web tools, with separate network and scorer Docker checks
+- preserves token refreshes in a private run cache without overwriting the user's credential file
+- separates new B4n/B4a/Q4/S2/V1 criteria from core v4, resolves the conditional change-record rule, and keeps incomplete comparisons and semantic review explicit
+- fixes run-order stdin inheritance and documents product comparisons separately from loading-only ablations
+
+Forge instructions and VERSION are unchanged. These offline checks establish harness behavior; no new live model comparison or effectiveness claim is included.
+
 ## 1.11.0
 
 Adaptive execution and end-to-end reliability revision:

@@ -45,11 +45,20 @@ The runnable benchmark lives in [`core/`](core/README.md). It provides:
 - deterministic scorer and report generator
 - separate agent and scoring containers for real runs, with bounded filesystem access
 - verified immutable Forge-release loading
+- native baseline, release and local candidate arms with installed-content checks
 - Forge package discoverability/readability preflight
 - paired/interleaved cells with deterministic randomized arm ordering
 - genuine two-session B3 context-loss boundary
+- frozen pilot inputs, invocation accounting, explicit pause/resume and offline recovery before retry
+- a provider-only network proxy with no direct agent network access
 - raw evidence retention
 - reference/no-op/drifter mock agents for harness self-testing
+
+Use the [pilot launcher](core/PILOT.md) for live comparisons. It defaults to
+subscription-only authentication and treats dollar estimates as informational.
+Every started invocation counts against the frozen ceiling, including attempts
+that fail to connect. The [network policy](core/NETWORK.md) documents the enforced
+boundary and its limitations; public test source is not a secrecy mechanism.
 
 CI exercises deterministic mock self-tests and dedicated container-isolation regressions when relevant files change. Mock outcomes show that the scorer can pass the reference fixtures and reject the included no-op/drifting behavior; they are **not** Forge benchmark results. Container checks test specific isolation properties, not all possible adversarial behavior.
 
@@ -59,15 +68,25 @@ artifact checks from unresolved semantic/process review. v4 must not be pooled
 with earlier scores. Existing private or local result directories are not
 published evidence for this repository revision.
 
+Five supplemental scenarios use a separate [v4-supp1 contract](core/CRITERIA_v4-supp1.md):
+quick changes with and without conflicting requirements, a project change-record
+rule, a destructive operation, stale status, and unmet invariants are exercised
+across the core and supplemental set. Supplemental scores are reported separately
+from v4. Core B3 retains the fresh-session recovery measurement; supplemental S2
+tests stale-status handling within one session.
+
 ## Conditions
 
 For methodology evaluation use at least:
 
 - **Baseline**: same agent/runtime, no Forge.
 - **Current Forge**: released Forge version loaded from verified immutable release provenance.
-- **Candidate/Ablation**: optional, for testing a proposed change against both baseline and current Forge. Candidate runs must be labelled as unverified/local unless they also use a published release.
+- **Candidate**: a proposed package compared with both baseline and current Forge. Candidate runs must be labelled as unverified/local unless they also use a published release.
 
-A baseline comparison tells whether Forge as a whole helps. An ablation comparison is needed to learn whether a specific section is useful or dead weight.
+A baseline comparison tests whether Forge as a whole helps. An ablation must hold
+other factors constant to isolate one intervention. Comparing candidate.2 with
+v1.11.0 is a product comparison because both wording and behavior changed; it
+cannot establish the effect of instruction loading alone.
 
 ## Test quality
 

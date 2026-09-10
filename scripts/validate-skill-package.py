@@ -185,7 +185,20 @@ required = [
     "evals/core/build_fixtures.py",
     "evals/core/fixture_bundle.py",
     "evals/core/container_run.py",
+    "evals/core/credential_cache.py",
+    "evals/core/stage_snapshot.py",
+    "evals/core/pilot_launch.py",
+    "evals/core/pilot_manifest.py",
+    "evals/core/pilot_ledger.py",
+    "evals/core/pilot_analysis.py",
+    "evals/core/network_run.py",
+    "evals/core/network_proxy.py",
+    "evals/core/network_client.py",
+    "evals/core/network_policy.json",
+    "evals/core/NETWORK.md",
+    "evals/core/PILOT.md",
     "evals/core/fixture_bundle.json.gz.b64",
+    "evals/core/fixture_supplements.json",
     "evals/core/assert_run.py",
     "evals/core/score_entrypoint.py",
     "evals/core/aggregate.py",
@@ -193,6 +206,9 @@ required = [
     "evals/core/mock_agent.py",
     "evals/core/container/Containerfile",
     "evals/core/container/ScorerContainerfile",
+    "evals/core/container/NetworkProxyContainerfile",
+    "evals/core/CRITERIA_v4.md",
+    "evals/core/CRITERIA_v4-supp1.md",
     "tests/test_dual_agent_runner.py",
     "tests/test_benchmark_isolation.py",
     "references/requirements.md",
@@ -269,11 +285,26 @@ if bundle_path.exists():
             if not expected_prompts.issubset(prompt_keys):
                 err(f"benchmark fixture bundle missing prompts: {sorted(expected_prompts - prompt_keys)}")
 
+supplement_path = root / "evals/core/fixture_supplements.json"
+if supplement_path.exists():
+    try:
+        supplement = json.loads(supplement_path.read_text(encoding="utf-8"))
+        expected_scenarios = {"b4n", "b4a", "q4", "s2", "v1"}
+        if not isinstance(supplement, dict) or supplement.get("criteria_version") != "v4-supp1":
+            raise ValueError("supplement must declare criteria v4-supp1")
+        for key in ("overlays", "prompts"):
+            values = supplement.get(key)
+            if not isinstance(values, dict) or set(values) != expected_scenarios:
+                raise ValueError(f"supplement {key} must enumerate exactly the five supplemental scenarios")
+    except (OSError, ValueError) as exc:
+        err(f"benchmark fixture supplement is invalid: {exc}")
+
 python_files = [
     *(root / "templates").glob("*.py"),
     *(root / "scripts").glob("*.py"),
     *(root / "scripts" / "adapters").glob("*.py"),
     *(root / "evals" / "core").glob("*.py"),
+    *(root / "evals" / "core" / "hidden").rglob("*.py"),
     *(root / "tests").glob("*.py"),
 ]
 for path in python_files:

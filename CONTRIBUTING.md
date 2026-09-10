@@ -32,14 +32,15 @@ The [control-state schema](templates/project-control.schema.json) and [execution
 Run the deterministic suite for code changes. Runner tests use fake adapters and local subprocess checks and do not require Claude/Codex credentials:
 
 ```bash
-python -m pytest -q tests --ignore=tests/test_benchmark_isolation.py
+python -m pytest -q tests --ignore=tests/test_benchmark_isolation.py --ignore=tests/test_benchmark_network_isolation.py
 ```
 
 The [validation workflow](.github/workflows/validate.yml) is the source of truth for current test selections and lint/type-check commands. The harness supports Docker or Podman; the separate [benchmark isolation tests](tests/test_benchmark_isolation.py) use Docker. Build their scorer image before running them:
 
 ```bash
 docker build -f evals/core/container/ScorerContainerfile -t forge-bench-scorer:ci evals/core
-python -m pytest -q tests/test_benchmark_isolation.py
+docker build -f evals/core/container/NetworkProxyContainerfile -t forge-bench-egress:ci evals/core
+python -m pytest -q tests/test_benchmark_isolation.py tests/test_benchmark_network_isolation.py
 ```
 
 Do not treat a skipped container suite as proof that isolation passed.

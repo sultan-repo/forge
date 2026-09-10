@@ -38,6 +38,30 @@ def reference(repo: Path, scenario: str, stage: str = "main") -> None:
     )
 
 
+@pytest.mark.parametrize("case", ["complete", "missing", "duplicate", "live"])
+def test_mock_selftest_requires_complete_declared_matrix(case: str, tmp_path: Path) -> None:
+    (tmp_path / "MANIFEST.json").write_text(json.dumps({
+        "mock": case != "live", "scenarios": "b4n,q4",
+        "conditions": "baseline,candidate", "runs_per_cell": 1,
+    }))
+    for scenario in ("b4n", "q4"):
+        for condition in ("baseline", "candidate"):
+            if case == "missing" and (scenario, condition) == ("q4", "candidate"):
+                continue
+            path = tmp_path / scenario / condition / "run-1"
+            path.mkdir(parents=True)
+            (path / "run.json").write_text(json.dumps({
+                "scenario": scenario, "condition": condition, "run": 1, "pass": True,
+            }))
+    if case == "duplicate":
+        copy = tmp_path / "b4n" / "baseline" / "run-2"
+        copy.mkdir()
+        shutil.copyfile(copy.parent / "run-1/run.json", copy / "run.json")
+    result = subprocess.run([sys.executable, str(CORE / "selftest.py"), str(tmp_path), "--expect", "pass"],
+                            text=True, capture_output=True, check=False)
+    assert (result.returncode == 0) is (case == "complete"), result.stdout + result.stderr
+
+
 @pytest.mark.parametrize("arguments", [
     ["--runs", "0"], ["--runs", "-1"], ["--runs", "nan"],
     ["--scenarios", "b5"], ["--scenarios", "b1,b1"],
@@ -168,6 +192,62 @@ def test_result_error_is_not_success_even_with_zero_cli_exit(tmp_path: Path) -> 
     assert not scorer.agent_completed({"rc": 0}, parsed)
 
 
+def test_agent_stdin_cannot_consume_later_matrix_cells(tmp_path: Path) -> None:
+    core = tmp_path / "core"
+    shutil.copytree(CORE, core, ignore=shutil.ignore_patterns("build", "results", "__pycache__"))
+    mock = core / "mock_agent.py"
+    mock.write_text(mock.read_text().replace(
+        "        reference(scenario, stage)\n",
+        "        assert not sys.stdin.read(), 'run order leaked to agent stdin'\n"
+        "        reference(scenario, stage)\n",
+    ))
+    result = harness(["--scenarios", "b4", "--conditions", "baseline,forge,candidate", "--runs", "2", "--out", "results"],
+                     tmp_path, core / "run.sh")
+    assert result.returncode == 0, result.stdout + result.stderr
+    cells = list((tmp_path / "results/b4").glob("*/run-*/run.json"))
+    assert len(cells) == 6
+    assert all(json.loads(cell.read_text())["pass"] for cell in cells)
+
+
+def test_b3_sealed_first_stage_can_resume_without_another_first_session(tmp_path: Path) -> None:
+    first = harness(["--scenarios", "b3", "--conditions", "baseline", "--runs", "1", "--out", "first"], tmp_path)
+    assert first.returncode == 0, first.stderr
+    stage = tmp_path / "first/b3/baseline/run-1/stage1"
+    mapping = tmp_path / "recovery.json"
+    mapping.write_text(json.dumps({"b3/baseline/run-1": str(stage)}))
+    core = tmp_path / "core"
+    shutil.copytree(CORE, core, ignore=shutil.ignore_patterns("build", "results", "__pycache__"))
+    mock = core / "mock_agent.py"
+    mock.write_text(mock.read_text().replace(
+        "        reference(scenario, stage)\n",
+        "        assert stage != 'stage1', 'completed stage was repeated'\n"
+        "        reference(scenario, stage)\n",
+    ))
+    env = {**os.environ, "PATH": str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"],
+           "BENCH_MOCK_AGENT": "reference", "BENCH_STAGE1_RECOVERY": str(mapping)}
+    resumed = subprocess.run(["bash", str(core / "run.sh"), "--scenarios", "b3", "--conditions", "baseline",
+                              "--runs", "1", "--out", "resumed"], cwd=tmp_path, env=env,
+                             capture_output=True, text=True, timeout=60, check=False)
+    assert resumed.returncode == 0, resumed.stdout + resumed.stderr
+    output = tmp_path / "resumed/b3/baseline/run-1"
+    assert json.loads((output / "run.json").read_text())["pass"]
+    assert (output / "stage1/RECOVERED_FROM.json").exists()
+    assert not (output / "stage1-config").exists()
+    assert (output / "stage2-config").exists()
+
+
+def test_b3_modified_snapshot_is_rejected_before_restore(tmp_path: Path) -> None:
+    first = harness(["--scenarios", "b3", "--conditions", "baseline", "--runs", "1", "--out", "first"], tmp_path)
+    assert first.returncode == 0, first.stderr
+    stage = tmp_path / "first/b3/baseline/run-1/stage1"
+    (stage / "repo-snapshot/docs/STATUS.md").write_text("tampered")
+    restored = subprocess.run([sys.executable, str(CORE / "stage_snapshot.py"), "restore", str(stage),
+                               str(tmp_path / "repo"), str(tmp_path / "stage")],
+                              capture_output=True, text=True, check=False)
+    assert restored.returncode != 0 and "snapshot changed" in restored.stderr
+    assert not (tmp_path / "repo").exists()
+
+
 def test_transcripts_record_reported_models_across_fresh_sessions(tmp_path: Path) -> None:
     path = tmp_path / "transcript.jsonl"
     path.write_text('\n'.join(json.dumps(event) for event in [
@@ -231,6 +311,17 @@ def test_scorer_result_must_agree_with_assertions(payload: dict) -> None:
 def test_activation_requires_exact_success_without_disclosing_version(
     tmp_path: Path, result: str, is_error: bool,
 ) -> None:
+    core = tmp_path / "core"
+    shutil.copytree(CORE, core, ignore=shutil.ignore_patterns("build", "results", "__pycache__"))
+    # Isolate the real activation/ledger path using a local fake transport.
+    # Network enforcement is exercised separately by mandatory Docker tests.
+    (core / "network_run.py").write_text(
+        "import json, subprocess, sys\n"
+        "if sys.argv[1] == 'identity':\n"
+        "    print(json.dumps({'network_identity_sha256': 'test-network'}))\n"
+        "else:\n"
+        "    raise SystemExit(subprocess.call([sys.argv[1], 'run', *sys.argv[5:]]))\n"
+    )
     package = tmp_path / "candidate"
     (package / "scripts").mkdir(parents=True)
     (package / "scripts/validate-skill-package.py").write_text("", encoding="utf-8")
@@ -248,7 +339,8 @@ def test_activation_requires_exact_success_without_disclosing_version(
         "if a[0] == 'image' and '--format' in a: print('sha256:fixture')\n"
         "elif a[0] == 'run':\n"
         "    if '--version' in a: print('test-claude')\n"
-        "    elif '-p' in a:\n"
+            "    elif '-p' in a:\n"
+            "        print('{\"type\": \"system\", \"subtype\": \"init\", \"model\": \"test-model\"}')\n"
         f"        Path({str(prompt_log)!r}).write_text(a[a.index('-p')+1])\n"
         f"        print({json.dumps(event)!r})\n",
         encoding="utf-8",
@@ -260,9 +352,11 @@ def test_activation_requires_exact_success_without_disclosing_version(
         "BENCH_MOCK_AGENT": "", "BENCH_CONTAINER_RUNTIME": str(runtime),
         "FORGE_DIR": "candidate", "ALLOW_UNVERIFIED_FORGE": "1",
         "ANTHROPIC_API_KEY": "test-only-no-network", "COPY_CREDENTIALS": "0",
+        "BENCH_LEDGER": str(tmp_path / "ledger.jsonl"), "BENCH_INVOCATION_CEILING": "3",
+        "CLAUDE_MODEL": "test-model", "BENCH_PINNED_MODEL": "test-model",
     })
     completed = subprocess.run(
-        ["bash", str(CORE / "run.sh"), "--scenarios", "b4", "--conditions", "forge", "--runs", "1", "--out", "results"],
+        ["bash", str(core / "run.sh"), "--scenarios", "b4", "--conditions", "forge", "--runs", "1", "--out", "results"],
         cwd=tmp_path, env=env, capture_output=True, text=True, timeout=30, check=False,
     )
     assert completed.returncode != 0

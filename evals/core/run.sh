@@ -48,7 +48,7 @@ import hashlib
 from pathlib import Path
 
 digest = hashlib.sha256()
-names = ["container/ScorerContainerfile", "assert_run.py", "score_entrypoint.py", "fixture_bundle.py", "fixture_bundle.json.gz.b64"]
+names = ["container/ScorerContainerfile", "assert_run.py", "score_entrypoint.py", "fixture_bundle.py", "fixture_bundle.json.gz.b64", "fixture_supplements.json"]
 names.extend(str(path) for path in sorted(Path("hidden").rglob("*.py")))
 for name in names:
     digest.update(name.encode())
@@ -57,13 +57,62 @@ print(digest.hexdigest())
 PY
 )"
 : "${BENCH_SCORER_IMAGE:=forge-bench-scorer:${SCORER_SOURCE_SHA256:0:16}}"
+NETWORK_SOURCE_SHA256="$(python3 - <<'PY'
+import hashlib
+from pathlib import Path
+digest = hashlib.sha256()
+for name in ("container/NetworkProxyContainerfile", "network_policy.json", "network_proxy.py", "network_client.py", "network_run.py"):
+    digest.update(name.encode())
+    digest.update(Path(name).read_bytes())
+print(digest.hexdigest())
+PY
+)"
+: "${BENCH_NETWORK_IMAGE:=forge-bench-egress:${NETWORK_SOURCE_SHA256:0:16}}"
+: "${BENCH_EXPECT_NETWORK_IMAGE_ID:=}" "${BENCH_EXPECT_NETWORK_IDENTITY_SHA256:=}"
+# Fixture and criteria identity travel with every result so revisions cannot be pooled silently.
+FIXTURE_VERSION="$(python3 - <<'PY'
+from fixture_bundle import load_bundle
+print(load_bundle().get("fixture_version", "unknown"))
+PY
+)"
+export FIXTURE_VERSION
 
 : "${BENCH_MOCK_AGENT:=}"
+# Execution controls, normally set by evals/core/pilot_launch.py from a frozen manifest. All optional.
+#   BENCH_LEDGER                 append-only session ledger; every agent session is checked before and recorded after
+#   BENCH_INVOCATION_CEILING     maximum number of agent sessions (preflights and stages included)
+#   BENCH_CEILING_EXCLUDES_UNREACHABLE=1   count the ceiling over sessions that reached the provider only
+#   BENCH_USD_CEILING            optional spending ceiling on provider estimates (BENCH_SESSION_RESERVE_USD reserved per
+#                                session); unset = no spending rule, estimates recorded as informational metrics only
+#   BENCH_PINNED_MODEL           the main model every session must report; a mismatch is an infrastructure failure
+#   BENCH_EXPECT_AGENT_IMAGE_ID / BENCH_EXPECT_SCORER_IMAGE_ID   image identities that must resolve exactly
+#   BENCH_EXPECT_FORGE_SHA256 / BENCH_EXPECT_CANDIDATE_SHA256   runtime-projection hashes each installed config must match
+#   BENCH_EXPECT_RUN_ORDER_SHA256  sha256 the generated RUN_ORDER.tsv must have
+#   BENCH_CELL_FILTER            whitespace-separated "scenario/condition/run-N" cells to run (retries); order unchanged
+#   BENCH_SCORER_LOCAL=1         test-only: score with the local scorer instead of the isolated container (recorded)
+#   BENCH_MOCK_INFRA_FAIL        test-only, mock mode: cells whose agent session is replaced by a runtime failure
+#   BENCH_MOCK_PROVIDER_LIMIT    test-only, mock mode: cells whose first session ends on a subscription usage limit
+# A session that ends on a provider limit (subscription cap, rate limit, overload) pauses the run: PAUSED.json is
+# written and run.sh exits 4; the launcher resumes the unscored cells after the reset. Not a failure.
+: "${BENCH_LEDGER:=}" "${BENCH_INVOCATION_CEILING:=}" "${BENCH_USD_CEILING:=}" "${BENCH_SESSION_RESERVE_USD:=}"
+: "${BENCH_PINNED_MODEL:=}" "${BENCH_EXPECT_AGENT_IMAGE_ID:=}" "${BENCH_EXPECT_SCORER_IMAGE_ID:=}"
+: "${BENCH_EXPECT_FORGE_SHA256:=}" "${BENCH_EXPECT_CANDIDATE_SHA256:=}" "${BENCH_EXPECT_RUN_ORDER_SHA256:=}"
+: "${BENCH_CEILING_EXCLUDES_UNREACHABLE:=}"
+: "${BENCH_STAGE1_RECOVERY:=}"
+: "${BENCH_CELL_FILTER:=}" "${BENCH_SCORER_LOCAL:=}" "${BENCH_MOCK_INFRA_FAIL:=}" "${BENCH_MOCK_USAGE_USD:=0.5}" "${BENCH_MOCK_PROVIDER_LIMIT:=}"
+if [[ -n "$BENCH_LEDGER" ]]; then
+  [[ -n "$BENCH_INVOCATION_CEILING" ]] || { echo "BENCH_LEDGER requires BENCH_INVOCATION_CEILING." >&2; exit 2; }
+  if [[ -n "$BENCH_USD_CEILING" || -n "$BENCH_SESSION_RESERVE_USD" ]]; then
+    [[ -n "$BENCH_USD_CEILING" && -n "$BENCH_SESSION_RESERVE_USD" ]] || {
+      echo "a spending rule needs both BENCH_USD_CEILING and BENCH_SESSION_RESERVE_USD." >&2; exit 2; }
+  fi
+  [[ "$BENCH_LEDGER" == /* ]] || BENCH_LEDGER="$CALLER_DIR/$BENCH_LEDGER"
+fi
 python3 - "$SCENARIOS" "$CONDITIONS" "$RUNS" "$BENCH_SEED" "$MAX_TURNS" "$AGENT_TIMEOUT" "$SCORER_TIMEOUT" "$BENCH_MOCK_AGENT" <<'PY'
 import sys
 
-for label, value, allowed in (("scenarios", sys.argv[1], {"b1", "b2", "b3", "b4"}),
-                              ("conditions", sys.argv[2], {"baseline", "forge"})):
+for label, value, allowed in (("scenarios", sys.argv[1], {"b1", "b2", "b3", "b4", "b4n", "b4a", "q4", "s2", "v1"}),
+                              ("conditions", sys.argv[2], {"baseline", "forge", "candidate"})):
     items = value.split(",")
     if not set(items) <= allowed or len(items) != len(set(items)):
         raise SystemExit(f"invalid or duplicate {label}: {value}")
@@ -96,12 +145,17 @@ OUT="$(cd "$OUT" && pwd)"
 # Claim even an explicitly supplied empty output before writing any evidence.
 mkdir "$OUT/.running" || { echo "output directory is already in use: $OUT" >&2; exit 2; }
 CREDENTIAL_FILES=()
+OWN_CREDENTIAL_CACHE=false
+: "${BENCH_CREDENTIAL_CACHE_DIR:=}"
 cleanup() {
   local credential
   for credential in "${CREDENTIAL_FILES[@]-}"; do
     [[ -n "$credential" ]] || continue
     rm -f "$credential"
   done
+  if [[ "$OWN_CREDENTIAL_CACHE" == true && -d "$BENCH_CREDENTIAL_CACHE_DIR" ]]; then
+    python3 "$HERE/credential_cache.py" cleanup "$BENCH_CREDENTIAL_CACHE_DIR" || true
+  fi
   rmdir "$OUT/.running" 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -109,12 +163,23 @@ trap 'exit 143' TERM
 trap 'exit 130' INT
 MOCK=false
 [[ -n "$BENCH_MOCK_AGENT" ]] && MOCK=true
+if [[ "$MOCK" == false ]]; then
+  [[ -n "$BENCH_LEDGER" && -n "$BENCH_INVOCATION_CEILING" && -n "$BENCH_PINNED_MODEL" ]] || {
+    echo "Real runs require a ledger, explicit invocation ceiling, and pinned model; use pilot_launch.py." >&2; exit 2; }
+  [[ "${CLAUDE_MODEL:-}" == "$BENCH_PINNED_MODEL" ]] || { echo "CLAUDE_MODEL must equal BENCH_PINNED_MODEL." >&2; exit 2; }
+  [[ -z "$BENCH_SCORER_LOCAL$BENCH_MOCK_INFRA_FAIL$BENCH_MOCK_PROVIDER_LIMIT${BENCH_CONFIG_SEED_DIR:-}${BENCH_AGENT_RUN_EXTRA_ARGS:-}" ]] || {
+    echo "Real runs refuse test overrides, config seeds, and extra container arguments." >&2; exit 2; }
+  [[ "$PERMISSION_FLAGS" == "--dangerously-skip-permissions" ]] || {
+    echo "Real runs use the fixed isolated benchmark permission policy." >&2; exit 2; }
+fi
 
 IFS=, read -ra SC <<<"$SCENARIOS"
 IFS=, read -ra CO <<<"$CONDITIONS"
 HAS_FORGE=false
+HAS_CANDIDATE=false
 for condition in "${CO[@]}"; do
   [[ "$condition" == "forge" ]] && HAS_FORGE=true
+  [[ "$condition" == "candidate" ]] && HAS_CANDIDATE=true
 done
 
 FORGE_SRC=""
@@ -249,9 +314,57 @@ PY
   FORGE_PROVENANCE="github-immutable-release-attestation"
 }
 
+# Third arm: a local, unverified Forge candidate package (methodology under test), installed
+# from CANDIDATE_DIR with the same runtime projection and the same invocation as the forge arm.
+CANDIDATE_SRC=""
+CANDIDATE_VERSION=""
+CANDIDATE_COMMIT=""
+CANDIDATE_TREE_SHA256=""
+prepare_candidate() {
+  [[ "$HAS_CANDIDATE" == true ]] || return 0
+  if [[ "$MOCK" == true ]]; then
+    CANDIDATE_VERSION="mock"
+    CANDIDATE_COMMIT="mock"
+    return 0
+  fi
+  [[ -n "${CANDIDATE_DIR:-}" ]] || { echo "condition 'candidate' requires CANDIDATE_DIR (a local Forge package checkout)." >&2; exit 2; }
+  [[ "$CANDIDATE_DIR" == /* ]] || CANDIDATE_DIR="$CALLER_DIR/$CANDIDATE_DIR"
+  CANDIDATE_SRC="$(cd "$CANDIDATE_DIR" && pwd)"
+  (cd "$CANDIDATE_SRC" && python3 scripts/validate-skill-package.py) >"$OUT/candidate-validate.log" 2>&1
+  CANDIDATE_VERSION="$(tr -d '[:space:]' < "$CANDIDATE_SRC/VERSION")"
+  CANDIDATE_COMMIT="$(git -C "$CANDIDATE_SRC" rev-parse HEAD 2>/dev/null || echo local-unversioned)"
+  CANDIDATE_TREE_SHA256="$(runtime_projection_sha256 "$CANDIDATE_SRC")"
+}
+
+# Content hash of the runtime projection actually installed into an arm's config directory.
+runtime_projection_sha256() {
+  python3 - "$1" "${FORGE_RUNTIME_ITEMS[@]}" <<'PY'
+import hashlib
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+digest = hashlib.sha256()
+# Bytecode caches are build artefacts (the harness's own package validation writes them); never package content.
+def content_file(p):
+    return p.is_file() and "__pycache__" not in p.parts and p.suffix not in (".pyc", ".pyo")
+for item in sys.argv[2:]:
+    base = root / item
+    paths = sorted(p for p in base.rglob("*") if content_file(p)) if base.is_dir() else ([base] if base.is_file() else [])
+    for path in paths:
+        digest.update(str(path.relative_to(root)).encode())
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+print(digest.hexdigest())
+PY
+}
+
+FORGE_TREE_SHA256=""
 CONTAINER_RUNTIME=""
 CONTAINER_IMAGE_ID=""
 SCORER_IMAGE_ID=""
+NETWORK_IMAGE_ID=""
 AGENT_DESC=""
 ensure_container() {
   [[ "$MOCK" == false ]] || return 0
@@ -284,6 +397,22 @@ ensure_container() {
     echo "Benchmark container images could not be resolved." >&2
     exit 2
   }
+  if [[ -n "$BENCH_EXPECT_AGENT_IMAGE_ID" && "$CONTAINER_IMAGE_ID" != "$BENCH_EXPECT_AGENT_IMAGE_ID" ]]; then
+    echo "agent image $BENCH_AGENT_IMAGE resolves to $CONTAINER_IMAGE_ID, not the frozen $BENCH_EXPECT_AGENT_IMAGE_ID." >&2; exit 2
+  fi
+  if [[ -n "$BENCH_EXPECT_SCORER_IMAGE_ID" && "$SCORER_IMAGE_ID" != "$BENCH_EXPECT_SCORER_IMAGE_ID" ]]; then
+    echo "scorer image $BENCH_SCORER_IMAGE resolves to $SCORER_IMAGE_ID, not the frozen $BENCH_EXPECT_SCORER_IMAGE_ID." >&2; exit 2
+  fi
+  if ! "$CONTAINER_RUNTIME" image inspect "$BENCH_NETWORK_IMAGE" >/dev/null 2>&1; then
+    "$CONTAINER_RUNTIME" build -t "$BENCH_NETWORK_IMAGE" -f "$HERE/container/NetworkProxyContainerfile" "$HERE" >"$OUT/network-build.log" 2>&1
+  fi
+  NETWORK_IMAGE_ID="$("$CONTAINER_RUNTIME" image inspect "$BENCH_NETWORK_IMAGE" --format '{{.Id}}')"
+  if [[ -n "$BENCH_EXPECT_NETWORK_IMAGE_ID" && "$NETWORK_IMAGE_ID" != "$BENCH_EXPECT_NETWORK_IMAGE_ID" ]]; then
+    echo "Network proxy image differs from the frozen identity." >&2; exit 2
+  fi
+  python3 "$HERE/network_run.py" identity "$CONTAINER_RUNTIME" "$NETWORK_IMAGE_ID" >"$OUT/NETWORK_IDENTITY.json"
+  BENCH_EXPECT_NETWORK_IDENTITY_SHA256="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["network_identity_sha256"])' "$OUT/NETWORK_IDENTITY.json")"
+  export BENCH_EXPECT_NETWORK_IDENTITY_SHA256
   AGENT_DESC="$(python3 "$HERE/container_run.py" "$CONTAINER_RUNTIME" 30 --network none "$CONTAINER_IMAGE_ID" claude --version 2>/dev/null | head -1)"
   [[ -n "$AGENT_DESC" ]] || {
     echo "Benchmark agent image does not expose a working 'claude' executable." >&2
@@ -291,15 +420,21 @@ ensure_container() {
   }
 }
 
+: "${BENCH_CREDENTIALS_FILE:=$HOME/.claude/.credentials.json}"
 copy_credentials() {
   local cfg="$1"
   if [[ "${COPY_CREDENTIALS:-0}" == "1" ]]; then
-    [[ -f "$HOME/.claude/.credentials.json" ]] || {
-      echo "COPY_CREDENTIALS=1 but ~/.claude/.credentials.json does not exist." >&2
+    [[ -f "$BENCH_CREDENTIALS_FILE" ]] || {
+      echo "COPY_CREDENTIALS=1 but $BENCH_CREDENTIALS_FILE does not exist." >&2
       exit 2
     }
-    cp "$HOME/.claude/.credentials.json" "$cfg/.credentials.json"
-    chmod 600 "$cfg/.credentials.json"
+    if [[ -z "$BENCH_CREDENTIAL_CACHE_DIR" ]]; then
+      BENCH_CREDENTIAL_CACHE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/forge-bench-credentials.XXXXXX")"
+      chmod 700 "$BENCH_CREDENTIAL_CACHE_DIR"
+      OWN_CREDENTIAL_CACHE=true
+    fi
+    python3 "$HERE/credential_cache.py" init "$BENCH_CREDENTIALS_FILE" "$BENCH_CREDENTIAL_CACHE_DIR"
+    python3 "$HERE/credential_cache.py" copy "$BENCH_CREDENTIAL_CACHE_DIR" "$cfg"
     CREDENTIAL_FILES+=("$cfg/.credentials.json")
   elif [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
     echo "Set ANTHROPIC_API_KEY or COPY_CREDENTIALS=1 for real benchmark runs." >&2
@@ -311,38 +446,133 @@ make_config() {
   local cfg="$1" condition="$2"
   rm -rf "$cfg"
   mkdir -p "$cfg"
-  if [[ "$condition" == "forge" && "$MOCK" == false ]]; then
-    [[ -n "$FORGE_SRC" ]] || { echo "Forge source missing" >&2; exit 2; }
+  local src=""
+  [[ "$condition" == "forge" ]] && src="$FORGE_SRC"
+  [[ "$condition" == "candidate" ]] && src="$CANDIDATE_SRC"
+  if [[ -n "$src" && "$MOCK" == false ]]; then
     mkdir -p "$cfg/skills/forge"
     local item
     for item in "${FORGE_RUNTIME_ITEMS[@]}"; do
-      if [[ -e "$FORGE_SRC/$item" ]]; then
+      if [[ -e "$src/$item" ]]; then
         mkdir -p "$cfg/skills/forge/$(dirname "$item")"
-        cp -a "$FORGE_SRC/$item" "$cfg/skills/forge/$item"
+        cp -a "$src/$item" "$cfg/skills/forge/$item"
       fi
     done
   fi
   [[ "$MOCK" == true ]] || copy_credentials "$cfg"
+  # Optional per-arm config seed (for example nested-CLI permission settings in
+  # a dual-agent arm). Applied identically to every cell of the matrix.
+  if [[ -n "${BENCH_CONFIG_SEED_DIR:-}" ]]; then
+    cp -a "$BENCH_CONFIG_SEED_DIR/." "$cfg/"
+  fi
+  # Record what was actually installed, after every configuration step, and verify it against the content
+  # hashed at preparation time: a package edited while the matrix runs stops the run before the next session.
+  if [[ -n "$src" && "$MOCK" == false ]]; then
+    local installed expected=""
+    installed="$(runtime_projection_sha256 "$cfg/skills/forge")"
+    printf '%s\n' "$installed" >"$cfg/installed-package.sha256"
+    [[ "$condition" == "forge" ]] && expected="$FORGE_TREE_SHA256"
+    [[ "$condition" == "candidate" ]] && expected="$CANDIDATE_TREE_SHA256"
+    if [[ -n "$expected" && "$installed" != "$expected" ]]; then
+      echo "installed $condition package content $installed differs from the prepared package $expected (edited during the run?)." >&2
+      exit 2
+    fi
+  fi
+}
+
+# Session accounting (BENCH_LEDGER). `ledger_check` stops the run (exit 3, STOPPED.json) before a session that
+# would exceed the invocation ceiling or the spending policy; `ledger_record` appends the session's usage, cost,
+# model identity and failure classification after it.
+SESSION_KIND="main"
+SESSION_CELL="preflight"
+ledger_check() {
+  local session_out="$1"
+  [[ -n "$BENCH_LEDGER" ]] || return 0
+  local rc=0
+  local -a spend=()
+  [[ -n "$BENCH_USD_CEILING" ]] && spend+=(--usd-ceiling "$BENCH_USD_CEILING" --reserve-usd "$BENCH_SESSION_RESERVE_USD")
+  [[ "$BENCH_CEILING_EXCLUDES_UNREACHABLE" == "1" ]] && spend+=(--exclude-unreachable)
+  python3 "$HERE/pilot_ledger.py" start --ledger "$BENCH_LEDGER" --ceiling "$BENCH_INVOCATION_CEILING" \
+    --kind "$SESSION_KIND" --cell "$SESSION_CELL" --out-dir "$session_out" \
+    ${spend[@]+"${spend[@]}"} >"$OUT/ledger-start.json" 2>"$OUT/ledger-stop.json" || rc=$?
+  if [[ $rc -ne 0 ]]; then
+    cp "$OUT/ledger-stop.json" "$OUT/STOPPED.json"
+    echo "BUDGET/INVOCATION STOP before $SESSION_KIND $SESSION_CELL: $(cat "$OUT/STOPPED.json")" >&2
+    exit 3
+  fi
+  rm -f "$OUT/ledger-stop.json"
+}
+ledger_record() {
+  local transcript="$1" rc="$2" outdir="$3" stderr_path="${4:-}"
+  [[ -n "$BENCH_LEDGER" ]] || return 0
+  local -a extra=()
+  [[ "$MOCK" == true ]] && extra+=(--mock-usd "$BENCH_MOCK_USAGE_USD")
+  [[ -n "$BENCH_PINNED_MODEL" ]] && extra+=(--pinned-model "$BENCH_PINNED_MODEL")
+  [[ -n "$stderr_path" ]] && extra+=(--stderr "$stderr_path")
+  local lrc=0
+  python3 "$HERE/pilot_ledger.py" record --ledger "$BENCH_LEDGER" --kind "$SESSION_KIND" --cell "$SESSION_CELL" \
+    --transcript "$transcript" --rc "$rc" --out-dir "$outdir" ${extra[@]+"${extra[@]}"} >"$OUT/ledger-last.json" || lrc=$?
+  if [[ $lrc -eq 5 ]]; then
+    # Provider limit: preserve everything, record the pause, and hand control back to the launcher.
+    python3 - "$OUT/ledger-last.json" "$OUT/PAUSED.json" "$SESSION_CELL" "$SESSION_KIND" <<'PY'
+import json
+import pathlib
+import sys
+import time
+
+detail = json.loads(pathlib.Path(sys.argv[1]).read_text() or "{}")
+detail.update({"event": "paused", "cell": sys.argv[3], "session_kind": sys.argv[4], "paused_at_epoch": int(time.time()),
+               "action": "resume the unscored cells after the reset; this attempt is preserved and is not a failure"})
+pathlib.Path(sys.argv[2]).write_text(json.dumps(detail, indent=2) + "\n")
+PY
+    echo "PROVIDER LIMIT during $SESSION_KIND $SESSION_CELL: $(cat "$OUT/PAUSED.json")" >&2
+    exit 4
+  fi
+  if [[ $lrc -ne 0 ]]; then
+    echo "Session accounting or identity check failed; stopping without another session." >&2
+    exit "$lrc"
+  fi
+}
+
+# Preserve CLI refreshes privately between cells; never write the user's source credentials.
+credential_handoff() {
+  local cfg="$1"
+  [[ "${COPY_CREDENTIALS:-0}" == "1" ]] || return 0
+  python3 "$HERE/credential_cache.py" handoff "$BENCH_CREDENTIAL_CACHE_DIR" "$cfg"
 }
 
 run_real_agent() {
   local repo="$1" cfg="$2" prompt="$3" transcript="$4" stderr="$5" max_turns="$6" timeout_s="$7"
   local -a perm envargs cmd
+  ledger_check "$(dirname "$transcript")"
   read -r -a perm <<<"$PERMISSION_FLAGS"
   envargs=(-e CLAUDE_CONFIG_DIR=/config -e HOME=/tmp/bench-home)
   [[ -n "${ANTHROPIC_API_KEY:-}" ]] && envargs+=(-e ANTHROPIC_API_KEY)
-  cmd=(claude -p "$prompt" --output-format stream-json --verbose --max-turns "$max_turns")
+  # Optional extra container arguments (for example a reviewer-CLI auth mount
+  # in a dual-agent arm). Recorded in MANIFEST.json.
+  local -a extra=()
+  [[ -n "${BENCH_AGENT_RUN_EXTRA_ARGS:-}" ]] && read -r -a extra <<<"$BENCH_AGENT_RUN_EXTRA_ARGS"
+  cmd=(claude -p "$prompt" --output-format stream-json --verbose --max-turns "$max_turns" --disallowedTools WebFetch WebSearch)
   [[ -n "${CLAUDE_MODEL:-}" ]] && cmd+=(--model "$CLAUDE_MODEL")
   cmd+=("${perm[@]}")
 
   local rc=0
-  python3 "$HERE/container_run.py" "$CONTAINER_RUNTIME" "$timeout_s" -i \
+  BENCH_NETWORK_EVIDENCE="$(dirname "$transcript")/network.json" \
+  python3 "$HERE/network_run.py" "$CONTAINER_RUNTIME" "$timeout_s" "$NETWORK_IMAGE_ID" "$CONTAINER_IMAGE_ID" \
     --user "$(id -u):$(id -g)" \
     "${envargs[@]}" \
+    ${extra[@]+"${extra[@]}"} \
     -v "$repo:/workspace:rw" \
     -v "$cfg:/config:rw" \
     -w /workspace \
-    "$CONTAINER_IMAGE_ID" "${cmd[@]}" >"$transcript" 2>"$stderr" || rc=$?
+    -- "${cmd[@]}" >"$transcript" 2>"$stderr" </dev/null || rc=$?
+  local credential_rc=0
+  credential_handoff "$cfg" || credential_rc=$?
+  ledger_record "$transcript" "$rc" "$(dirname "$transcript")" "$stderr"
+  if [[ $credential_rc -ne 0 ]]; then
+    echo "Credential handoff failed after session accounting; inspect cache before resuming." >&2
+    exit 2
+  fi
   return "$rc"
 }
 
@@ -352,9 +582,37 @@ run_agent() {
   printf '%s\n' "$prompt" >"$outdir/prompt.txt"
   local start end rc=0
   start="$(python3 -c 'import time; print(time.monotonic())')"
+  SESSION_KIND="$stage"
+  [[ "$stage" == "main" || "$stage" == "stage1" || "$stage" == "stage2" ]] || SESSION_KIND="main"
   if [[ "$MOCK" == true ]]; then
-    (cd "$repo" && python3 "$HERE/mock_agent.py" "$BENCH_MOCK_AGENT" "$scenario" "$stage") >"$outdir/stdout.txt" 2>"$outdir/stderr.txt" || rc=$?
+    ledger_check "$outdir"
+    if [[ " $BENCH_MOCK_INFRA_FAIL " == *" $SESSION_CELL "* ]]; then
+      # test-only: an injected runtime failure (no session started, no transcript)
+      echo "injected container runtime failure" >"$outdir/stderr.txt"
+      : >"$outdir/stdout.txt"
+      rc=125
+    elif [[ " $BENCH_MOCK_PROVIDER_LIMIT " == *" $SESSION_CELL "* && ! -f "$OUT/../.mock-limit-consumed-$(echo "$SESSION_CELL" | tr / _)" ]]; then
+      # test-only: an injected subscription usage limit on the first attempt of this cell (reset 3 s later)
+      : >"$OUT/../.mock-limit-consumed-$(echo "$SESSION_CELL" | tr / _)"
+      python3 - "$outdir/transcript.jsonl" <<'PY'
+import json
+import sys
+import time
+
+with open(sys.argv[1], "w", encoding="utf-8") as stream:
+    stream.write(json.dumps({"type": "system", "subtype": "init", "model": "mock-model"}) + "\n")
+    stream.write(json.dumps({"type": "result", "subtype": "error_during_execution", "is_error": True,
+                             "result": f"Claude AI usage limit reached|{int(time.time()) + 3}"}) + "\n")
+PY
+      : >"$outdir/stdout.txt"
+      : >"$outdir/stderr.txt"
+      rc=1
+      ledger_record "$outdir/transcript.jsonl" "$rc" "$outdir" "$outdir/stderr.txt"
+    else
+      (cd "$repo" && python3 "$HERE/mock_agent.py" "$BENCH_MOCK_AGENT" "$scenario" "$stage") >"$outdir/stdout.txt" 2>"$outdir/stderr.txt" || rc=$?
+    fi
     : >"$outdir/transcript.jsonl"
+    ledger_record "$outdir/transcript.jsonl" "$rc" "$outdir"
   else
     run_real_agent "$repo" "$cfg" "$prompt" "$outdir/transcript.jsonl" "$outdir/stderr.txt" "$MAX_TURNS" "$AGENT_TIMEOUT" || rc=$?
   fi
@@ -367,31 +625,38 @@ import sys
 path, rc, start, end = sys.argv[1], int(sys.argv[2]), float(sys.argv[3]), float(sys.argv[4])
 with open(path, "w", encoding="utf-8") as stream:
     json.dump({"rc": rc, "timed_out": rc == 124, "wall_seconds": round(end - start, 2),
-               "mock": os.environ.get("MOCK") == "true"}, stream, indent=2)
+               "mock": os.environ.get("MOCK") == "true",
+               "fixture_version": os.environ.get("FIXTURE_VERSION"),
+               "criteria_version": os.environ.get("CRITERIA_VERSION")}, stream, indent=2)
 PY
 }
 
 forge_activation_preflight() {
-  [[ "$MOCK" == false && "$HAS_FORGE" == true ]] || return 0
+  local condition="${1:-forge}" expected_version="${2:-$FORGE_VERSION}" log_name="${3:-forge-activation}"
+  [[ "$MOCK" == false ]] || return 0
   local root repo cfg prompt marker rc=0
-  root="$OUT/forge-activation-preflight"
+  root="$OUT/$log_name-preflight"
   repo="$root/repo"
   cfg="$root/config"
   mkdir -p "$repo"
   printf '# Forge activation preflight\n' >"$repo/README.md"
   (cd "$repo" && git init -q -b main && git -c core.hooksPath=/dev/null add . && git -c core.hooksPath=/dev/null -c commit.gpgSign=false -c user.name=bench -c user.email=b@x commit -q -m init)
-  make_config "$cfg" forge
-  marker="FORGE_ACTIVE:$FORGE_VERSION"
+  make_config "$cfg" "$condition"
+  SESSION_KIND="preflight"
+  SESSION_CELL="$log_name"
+  marker="FORGE_ACTIVE:$expected_version"
   prompt="Use the Forge skill installed in your skill directory. Read its VERSION file and reply with FORGE_ACTIVE: followed by the exact version from that file, and nothing else. Do not modify the repository."
   run_real_agent "$repo" "$cfg" "$prompt" "$root/transcript.jsonl" "$root/stderr.txt" 8 240 || rc=$?
   [[ $rc -eq 0 ]] || { echo "Forge activation preflight agent failed rc=$rc" >&2; exit 2; }
-  python3 - "$root/transcript.jsonl" "$marker" <<'PY'
+  python3 - "$root/transcript.jsonl" "$expected_version" <<'PY'
 import json
 import pathlib
+import re
 import sys
 
 path = pathlib.Path(sys.argv[1])
-marker = sys.argv[2]
+version = sys.argv[2]
+marker = f"FORGE_ACTIVE:{version}"
 results = []
 for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
     try:
@@ -400,10 +665,14 @@ for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
         continue
     if isinstance(event, dict) and event.get("type") == "result":
         results.append(event)
-if len(results) != 1 or results[0].get("is_error") or results[0].get("subtype") != "success" or results[0].get("result", "").strip() != marker:
+# The prompt says "FORGE_ACTIVE: followed by the exact version"; accept only
+# optional whitespace after the colon, never a different or padded version.
+reply = results[0].get("result", "") if results else ""
+exact = isinstance(reply, str) and re.fullmatch(r"FORGE_ACTIVE:\s*" + re.escape(version), reply.strip()) is not None
+if len(results) != 1 or results[0].get("is_error") or results[0].get("subtype") != "success" or not exact:
     raise SystemExit(f"Forge activation preflight failed: expected exact successful result {marker!r}")
 PY
-  printf 'PASS %s\n' "$marker" >"$OUT/forge-activation.log"
+  printf 'PASS %s\n' "$marker" >"$OUT/$log_name.log"
 }
 
 get_prompt() {
@@ -523,9 +792,19 @@ PY
 }
 
 prepare_forge
+[[ "$HAS_FORGE" == true && "$MOCK" == false ]] && FORGE_TREE_SHA256="$(runtime_projection_sha256 "$FORGE_SRC")"
+if [[ -n "$BENCH_EXPECT_FORGE_SHA256" && "$HAS_FORGE" == true && "$MOCK" == false && "$FORGE_TREE_SHA256" != "$BENCH_EXPECT_FORGE_SHA256" ]]; then
+  echo "forge package content $FORGE_TREE_SHA256 does not match the frozen BENCH_EXPECT_FORGE_SHA256." >&2; exit 2
+fi
+prepare_candidate
+if [[ -n "$BENCH_EXPECT_CANDIDATE_SHA256" && "$HAS_CANDIDATE" == true && "$MOCK" == false && "$CANDIDATE_TREE_SHA256" != "$BENCH_EXPECT_CANDIDATE_SHA256" ]]; then
+  echo "candidate package content $CANDIDATE_TREE_SHA256 does not match the frozen BENCH_EXPECT_CANDIDATE_SHA256." >&2; exit 2
+fi
+if [[ "$MOCK" == false && "$HAS_FORGE" == true && "$HAS_CANDIDATE" == true && "$FORGE_TREE_SHA256" == "$CANDIDATE_TREE_SHA256" ]]; then
+  echo "Forge and candidate runtime contents are identical; use distinct treatments." >&2; exit 2
+fi
 ensure_container
 python3 build_fixtures.py --out "$OUT/fixtures" "${SC[@]}" >/dev/null
-forge_activation_preflight
 
 if [[ "$MOCK" == true ]]; then
   AGENT_DESC="MOCK:${BENCH_MOCK_AGENT}"
@@ -533,21 +812,25 @@ if [[ "$MOCK" == true ]]; then
 fi
 
 export OUT FORGE_TAG FORGE_VERSION FORGE_COMMIT FORGE_ASSET_SHA256 FORGE_VERIFIED FORGE_PROVENANCE
+export CANDIDATE_SRC CANDIDATE_VERSION CANDIDATE_COMMIT CANDIDATE_TREE_SHA256 FORGE_TREE_SHA256
+export BENCH_LEDGER BENCH_INVOCATION_CEILING BENCH_USD_CEILING BENCH_SESSION_RESERVE_USD BENCH_PINNED_MODEL BENCH_CEILING_EXCLUDES_UNREACHABLE
+export BENCH_EXPECT_AGENT_IMAGE_ID BENCH_EXPECT_SCORER_IMAGE_ID BENCH_EXPECT_FORGE_SHA256 BENCH_EXPECT_CANDIDATE_SHA256
+export BENCH_EXPECT_RUN_ORDER_SHA256 BENCH_CELL_FILTER BENCH_SCORER_LOCAL BENCH_MOCK_INFRA_FAIL BENCH_MOCK_PROVIDER_LIMIT BENCH_CREDENTIALS_FILE
 export AGENT_DESC CLAUDE_MODEL MAX_TURNS AGENT_TIMEOUT FORGE_INVOCATION SCENARIOS CONDITIONS RUNS BENCH_SEED
 export CONTAINER_RUNTIME CONTAINER_IMAGE_ID SCORER_IMAGE_ID BENCH_AGENT_IMAGE BENCH_SCORER_IMAGE MOCK
-export SCORER_SOURCE_SHA256 SCORER_TIMEOUT
+export SCORER_SOURCE_SHA256 SCORER_TIMEOUT NETWORK_IMAGE_ID BENCH_NETWORK_IMAGE BENCH_EXPECT_NETWORK_IDENTITY_SHA256
+export BENCH_AGENT_RUN_EXTRA_ARGS="${BENCH_AGENT_RUN_EXTRA_ARGS:-}" BENCH_CONFIG_SEED_DIR="${BENCH_CONFIG_SEED_DIR:-}" BENCH_ARM_LABEL="${BENCH_ARM_LABEL:-}"
 export FORGE_RUNTIME_PATHS="${FORGE_RUNTIME_ITEMS[*]}"
 python3 - <<'PY'
 import datetime
 import json
 import os
 import pathlib
-from assert_run import CRITERIA_VERSION
+from assert_run import criteria_for
 
 path = pathlib.Path(os.environ["OUT"]) / "MANIFEST.json"
 mock = os.environ.get("MOCK") == "true"
 obj = {
-    "criteria_version": CRITERIA_VERSION,
     "started_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     "forge_ref": os.environ.get("FORGE_TAG"),
     "forge_version": os.environ.get("FORGE_VERSION"),
@@ -556,6 +839,11 @@ obj = {
     "forge_verified": os.environ.get("FORGE_VERIFIED") == "true",
     "forge_provenance": os.environ.get("FORGE_PROVENANCE"),
     "forge_runtime_paths": os.environ["FORGE_RUNTIME_PATHS"].split(),
+    "candidate_source": os.environ.get("CANDIDATE_SRC") or None,
+    "candidate_version": os.environ.get("CANDIDATE_VERSION") or None,
+    "candidate_commit": os.environ.get("CANDIDATE_COMMIT") or None,
+    "candidate_runtime_sha256": os.environ.get("CANDIDATE_TREE_SHA256") or None,
+    "candidate_provenance": "local-unverified" if os.environ.get("CANDIDATE_SRC") else None,
     "agent": os.environ.get("AGENT_DESC"),
     "model": os.environ.get("CLAUDE_MODEL") or "default",
     "max_turns": int(os.environ["MAX_TURNS"]),
@@ -573,9 +861,35 @@ obj = {
     "scorer_container_image": os.environ.get("BENCH_SCORER_IMAGE"),
     "scorer_container_image_id": os.environ.get("SCORER_IMAGE_ID"),
     "scorer_source_sha256": os.environ.get("SCORER_SOURCE_SHA256"),
+    "fixture_version": os.environ.get("FIXTURE_VERSION"),
+    "criteria_by_scenario": {s: criteria_for(s) for s in os.environ["SCENARIOS"].split(",")},
     "scorer_timeout_s": int(os.environ["SCORER_TIMEOUT"]),
     "scorer_network": "not-applicable" if mock else "none",
+    "agent_network": "mock-local-trusted" if mock else "none-with-provider-socket-proxy",
+    "network_identity": None if mock else json.loads((path.parent / "NETWORK_IDENTITY.json").read_text()),
     "b3_boundary": "fresh-config-second-session",
+    "agent_run_extra_args": os.environ.get("BENCH_AGENT_RUN_EXTRA_ARGS") or None,
+    "config_seed_dir": os.environ.get("BENCH_CONFIG_SEED_DIR") or None,
+    "forge_runtime_sha256": os.environ.get("FORGE_TREE_SHA256") or None,
+    "execution_controls": {
+        "ledger": os.environ.get("BENCH_LEDGER") or None,
+        "invocation_ceiling": int(os.environ["BENCH_INVOCATION_CEILING"]) if os.environ.get("BENCH_INVOCATION_CEILING") else None,
+        "ceiling_counts": "sessions that reached the provider" if os.environ.get("BENCH_CEILING_EXCLUDES_UNREACHABLE") == "1" else "every session",
+        "usd_ceiling": float(os.environ["BENCH_USD_CEILING"]) if os.environ.get("BENCH_USD_CEILING") else None,
+        "session_reserve_usd": float(os.environ["BENCH_SESSION_RESERVE_USD"]) if os.environ.get("BENCH_SESSION_RESERVE_USD") else None,
+        "pinned_model": os.environ.get("BENCH_PINNED_MODEL") or None,
+        "expected_agent_image_id": os.environ.get("BENCH_EXPECT_AGENT_IMAGE_ID") or None,
+        "expected_scorer_image_id": os.environ.get("BENCH_EXPECT_SCORER_IMAGE_ID") or None,
+        "expected_forge_sha256": os.environ.get("BENCH_EXPECT_FORGE_SHA256") or None,
+        "expected_candidate_sha256": os.environ.get("BENCH_EXPECT_CANDIDATE_SHA256") or None,
+        "expected_run_order_sha256": os.environ.get("BENCH_EXPECT_RUN_ORDER_SHA256") or None,
+        "cell_filter": os.environ.get("BENCH_CELL_FILTER").split() if os.environ.get("BENCH_CELL_FILTER") else None,
+        "scorer_local_test_only": os.environ.get("BENCH_SCORER_LOCAL") == "1",
+        "mock_infra_fail_test_only": os.environ.get("BENCH_MOCK_INFRA_FAIL").split() if os.environ.get("BENCH_MOCK_INFRA_FAIL") else None,
+    "mock_provider_limit_test_only": os.environ.get("BENCH_MOCK_PROVIDER_LIMIT").split() if os.environ.get("BENCH_MOCK_PROVIDER_LIMIT") else None,
+        "spending_rule": "enforced" if os.environ.get("BENCH_USD_CEILING") else "none (provider estimates informational)",
+    },
+    "arm_label": os.environ.get("BENCH_ARM_LABEL") or None,
 }
 path.write_text(json.dumps(obj, indent=2) + "\n", encoding="utf-8")
 PY
@@ -596,8 +910,7 @@ for run in range(1, runs + 1):
     rng.shuffle(scenario_order)
     for scenario in scenario_order:
         condition_order = conditions[:]
-        if len(condition_order) == 2 and rng.randrange(2):
-            condition_order.reverse()
+        rng.shuffle(condition_order)  # balanced randomised arm order within each scenario/run block
         for condition in condition_order:
             ordinal += 1
             print(f"{ordinal}\t{run}\t{scenario}\t{condition}")
@@ -634,6 +947,8 @@ obj = {
     "timed_out": timed_out == "true",
     "wall_seconds": float(wall),
     "forge_commit": commit,
+    "fixture_version": os.environ.get("FIXTURE_VERSION"),
+    "criteria_version": os.environ.get("CRITERIA_VERSION"),
     "evidence": evidence,
 }
 with open(path, "w", encoding="utf-8") as stream:
@@ -644,30 +959,44 @@ PY
 run_one() {
   local scenario="$1" condition="$2" run_number="$3"
   local dir="$OUT/$scenario/$condition/run-$run_number" repo="$OUT/$scenario/$condition/run-$run_number/repo"
+  SESSION_CELL="$scenario/$condition/run-$run_number"
+  CRITERIA_VERSION="$(python3 -c 'from assert_run import criteria_for; import sys; print(criteria_for(sys.argv[1]))' "$scenario")"
+  export CRITERIA_VERSION
   mkdir -p "$dir"
-  cp -a "$OUT/fixtures/$scenario" "$repo"
+  local recovered_stage=""
+  if [[ "$scenario" == "b3" && -n "$BENCH_STAGE1_RECOVERY" ]]; then
+    recovered_stage="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get(sys.argv[2], ""))' "$BENCH_STAGE1_RECOVERY" "$SESSION_CELL")"
+  fi
+  if [[ -n "$recovered_stage" ]]; then
+    python3 "$HERE/stage_snapshot.py" restore "$recovered_stage" "$repo" "$dir/stage1"
+  else
+    cp -a "$OUT/fixtures/$scenario" "$repo"
+  fi
   local base
   base="$(git -C "$repo" rev-parse HEAD)"
 
   local prompt cfg main_dir rc wall timed transcript stderr stage1_result=""
   if [[ "$scenario" == "b3" ]]; then
     local stage1_dir="$dir/stage1" stage2_dir="$dir/stage2" cfg1="$dir/stage1-config" cfg2="$dir/stage2-config"
+    if [[ -z "$recovered_stage" ]]; then
     make_config "$cfg1" "$condition"
     prompt="$(get_prompt b3-stage1)"
-    [[ "$condition" == forge ]] && prompt="$FORGE_INVOCATION
+    [[ "$condition" == forge || "$condition" == candidate ]] && prompt="$FORGE_INVOCATION
 $prompt"
     run_agent "$scenario" "$condition" stage1 "$repo" "$cfg1" "$prompt" "$stage1_dir"
     # Score all Stage-1 changes against the fixture even when the agent committed
     # its handoff. A clean working tree can still contain valid durable evidence.
     commit_and_capture "$repo" "$base" "$stage1_dir"
     score_assertion stage1 b3 "$repo" "$stage1_dir/meta-stage.json" "$stage1_dir/transcript.jsonl" "$stage1_dir/run-stage1.json"
+    python3 "$HERE/stage_snapshot.py" capture "$repo" "$stage1_dir"
+    fi
     stage1_result="$stage1_dir/run-stage1.json"
     bench_git "$repo" add -A
     bench_git "$repo" -c user.name=bench -c user.email=b@x commit -q -m "stage1 handoff" --allow-empty
 
     make_config "$cfg2" "$condition"
     prompt="$(get_prompt b3-stage2)"
-    [[ "$condition" == forge ]] && prompt="$FORGE_INVOCATION
+    [[ "$condition" == forge || "$condition" == candidate ]] && prompt="$FORGE_INVOCATION
 $prompt"
     run_agent "$scenario" "$condition" stage2 "$repo" "$cfg2" "$prompt" "$stage2_dir"
     rc="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["rc"])' "$stage2_dir/meta-stage.json")"
@@ -697,7 +1026,7 @@ PY
     cfg="$dir/config"
     make_config "$cfg" "$condition"
     prompt="$(get_prompt "$scenario")"
-    [[ "$condition" == forge ]] && prompt="$FORGE_INVOCATION
+    [[ "$condition" == forge || "$condition" == candidate ]] && prompt="$FORGE_INVOCATION
 $prompt"
     run_agent "$scenario" "$condition" main "$repo" "$cfg" "$prompt" "$main_dir"
     rc="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["rc"])' "$main_dir/meta-stage.json")"
@@ -711,10 +1040,26 @@ $prompt"
   fi
 }
 
-while IFS=$'\t' read -r ordinal run_number scenario condition; do
-  [[ "$ordinal" == "ordinal" ]] && continue
-  run_one "$scenario" "$condition" "$run_number"
-done <"$OUT/RUN_ORDER.tsv"
+if [[ -n "$BENCH_EXPECT_RUN_ORDER_SHA256" ]]; then
+  actual_order_sha="$(python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$OUT/RUN_ORDER.tsv")"
+  if [[ "$actual_order_sha" != "$BENCH_EXPECT_RUN_ORDER_SHA256" ]]; then
+    echo "generated RUN_ORDER.tsv ($actual_order_sha) differs from the frozen order ($BENCH_EXPECT_RUN_ORDER_SHA256)." >&2; exit 2
+  fi
+fi
 
-python3 aggregate.py "$OUT"
+[[ "$HAS_FORGE" == true ]] && forge_activation_preflight forge "$FORGE_VERSION" forge-activation
+[[ "$HAS_CANDIDATE" == true ]] && forge_activation_preflight candidate "$CANDIDATE_VERSION" candidate-activation
+
+# Read the run order on a dedicated descriptor: agent containers run with
+# stdin attached (-i) and would otherwise consume the remaining cells.
+while IFS=$'\t' read -r -u 3 ordinal run_number scenario condition; do
+  [[ "$ordinal" == "ordinal" ]] && continue
+  if [[ -n "$BENCH_CELL_FILTER" && " $BENCH_CELL_FILTER " != *" $scenario/$condition/run-$run_number "* ]]; then
+    continue
+  fi
+  run_one "$scenario" "$condition" "$run_number" </dev/null
+done 3<"$OUT/RUN_ORDER.tsv"
+
+# Reports are written per criteria label; labels are never pooled (aggregate.py refuses mixed input otherwise).
+python3 aggregate.py --by-criteria "$OUT"
 echo "Report: $OUT/REPORT.md"

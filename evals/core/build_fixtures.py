@@ -39,8 +39,13 @@ REMOVE = {
         "data/budgets.json",
     ],
     "b4": [],
+    "b4n": [],
+    "b4a": [],
+    "q4": [],
+    "s2": ["src/ledger/budgets.py", "src/ledger/export.py", "tests/test_budgets.py", "tests/test_export.py", "data/budgets.json"],
+    "v1": ["src/ledger/budgets.py", "src/ledger/export.py", "tests/test_budgets.py", "tests/test_export.py", "data/budgets.json"],
 }
-INHERIT = {"b3": "b2"}
+INHERIT = {"b3": "b2", "s2": "b3"}
 GIT = ["git", "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid",
        "-c", "commit.gpgSign=false", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"]
 
@@ -64,9 +69,14 @@ def build(name: str, out: Path = OUT) -> Path:
     write_mapping(dest, BUNDLE["full"])
     for rel in REMOVE[name]:
         (dest / rel).unlink(missing_ok=True)
-    for layer in (INHERIT.get(name), name):
-        if layer:
-            write_mapping(dest, BUNDLE["overlays"].get(layer, {}))
+    layers = [name]
+    while layers[-1] in INHERIT:
+        parent = INHERIT[layers[-1]]
+        if parent in layers:
+            raise ValueError("cyclic fixture inheritance")
+        layers.append(parent)
+    for layer in reversed(layers):
+        write_mapping(dest, BUNDLE["overlays"].get(layer, {}))
     (dest / ".gitignore").write_text("__pycache__/\n.pytest_cache/\n*.egg-info/\n", encoding="utf-8")
     subprocess.run(["git", "init", "-q", "-b", "main"], cwd=dest, check=True)
     subprocess.run(GIT + ["add", "-A"], cwd=dest, check=True)
