@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "purpose": "Benchmark provider transport only; no general web or package downloads",
+  "allowed_tls_hosts": [
+    "api.anthropic.com",
+    "platform.claude.com"
+  ],
+  "allowed_port": 443,
+  "require_public_address": true,
+  "require_matching_sni": true
+}

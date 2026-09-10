@@ -1,0 +1,7 @@
+FROM python:3.12-slim
+
+WORKDIR /proxy
+COPY network_proxy.py network_client.py network_policy.json /proxy/
+RUN chmod -R a-w /proxy
+ENV PYTHONDONTWRITEBYTECODE=1
+ENTRYPOINT []

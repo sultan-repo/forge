@@ -23,7 +23,9 @@ because these gates pass.
 
 - `hidden/` is the editable source of scoring tests. The compressed fixture
   bundle's historical hidden section is retained as archival data and is no
-  longer read by this scorer. The candidate agent cannot access either source.
+  longer read by this scorer. Neither source is mounted into the candidate
+  filesystem. The [network boundary](NETWORK.md) restricts retrieval during runs;
+  public source and provider/model knowledge are not secret test material.
 - Tests exercise contracts named in PLAN: public CLI operations, `Transaction`,
   `Store`, `report.monthly_totals`, and `budgets.load_budgets`. A private formatter,
   importer helper, module allowlist, or use of a particular internal design is

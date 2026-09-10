@@ -2,17 +2,19 @@
 """Aggregate run.json files under a results dir into REPORT.md. Pure arithmetic; no estimates."""
 from __future__ import annotations
 
+import argparse
 import json
 import math
 import statistics as st
-import sys
 from collections import defaultdict
 from pathlib import Path
 
-from assert_run import CRITERIA_VERSION
+from assert_run import SCENARIO_CRITERIA, criteria_for
 
 NAMES = {"b1": "B1 Scope retention", "b2": "B2 Debug tunnel", "b3": "B3 Context-loss recovery", "b4": "B4 Proportionality"}
-COND = {"baseline": "Baseline", "forge": "Forge"}
+NAMES.update({"b4n": "B4n Export formatting", "b4a": "B4a Conditional change record", "q4": "Q4 Destructive safeguard",
+              "s2": "S2 Stale detour recovery", "v1": "V1 Invariant verification claims"})
+COND = {"baseline": "Baseline", "forge": "Forge", "candidate": "Candidate"}
 
 
 def med(xs):
@@ -45,20 +47,44 @@ def wilson(k, n, z=1.96):
     return max(0, c - h), min(1, c + h)
 
 
-def main(out_dir: str):
+def main(out_dir: str, by_criteria: bool = False):
     root = Path(out_dir)
     runs = [json.loads(path.read_text()) for path in sorted(root.glob("*/*/run-*/run.json"))]
     if not runs:
         raise SystemExit("no final run.json files found; there are no results to aggregate")
     manifest = json.loads((root / "MANIFEST.json").read_text()) if (root / "MANIFEST.json").exists() else {}
     versions = {run.get("criteria_version") for run in runs}
-    if versions != {CRITERIA_VERSION} or manifest.get("criteria_version") != CRITERIA_VERSION:
+    if not versions.issubset(set(SCENARIO_CRITERIA.values())) or (len(versions) > 1 and not by_criteria):
         raise SystemExit("criteria versions are missing, mixed, or incompatible; use the scorer/report revision that produced these results")
+    scenarios = manifest.get("scenarios", "").split(",")
+    criteria_map = manifest.get("criteria_by_scenario")
+    if criteria_map is None:
+        criteria_map = dict.fromkeys(scenarios, manifest.get("criteria_version"))
+    if (not isinstance(criteria_map, dict) or any(scenario not in SCENARIO_CRITERIA or criteria_map.get(scenario) != criteria_for(scenario)
+                                                for scenario in scenarios)
+            or any(run.get("scenario") not in SCENARIO_CRITERIA or run.get("criteria_version") != criteria_for(run["scenario"]) for run in runs)):
+        raise SystemExit("criteria versions do not match the scenario contracts and manifest")
+    labels = {criteria_for(scenario) for scenario in scenarios}
+    if len(labels) > 1 and not by_criteria:
+        raise SystemExit("criteria versions in the manifest are mixed; use --by-criteria")
+    if len(labels) > 1:
+        for version in sorted(labels):
+            render_report(root, [run for run in runs if run["criteria_version"] == version], manifest, version,
+                          f"REPORT.{version}.md", f"ALL_RUNS.{version}.json")
+        (root / "REPORT.md").write_text("# Benchmark reports by criteria\n\nCriteria are not pooled.\n\n" + "\n".join(
+            f"- [{version}](REPORT.{version}.md)" for version in sorted(labels)) + "\n")
+    else:
+        render_report(root, runs, manifest, next(iter(versions)))
+
+
+def render_report(root: Path, runs: list[dict], manifest: dict, criteria: str,
+                  report_name: str = "REPORT.md", runs_name: str = "ALL_RUNS.json") -> None:
     identities = [(run["scenario"], run["condition"], run["run"]) for run in runs]
     if len(set(identities)) != len(identities):
         raise SystemExit("duplicate scenario/condition/run identities; select one documented primary attempt per cell")
     expected = {(scenario, condition, run)
                 for scenario in manifest.get("scenarios", "").split(",")
+                if criteria_for(scenario) == criteria
                 for condition in manifest.get("conditions", "").split(",")
                 for run in range(1, int(manifest.get("runs_per_cell", 0)) + 1)}
     complete = bool(expected) and set(identities) == expected
@@ -66,11 +92,13 @@ def main(out_dir: str):
     for run in runs:
         cells[(run["scenario"], run["condition"])].append(run)
     scenarios = sorted({scenario for scenario, _ in cells})
-    conds = [cond for cond in ("baseline", "forge") if any(cond == key[1] for key in cells)]
+    if any(condition not in COND for _scenario, condition in cells):
+        raise SystemExit("unknown benchmark condition")
+    conds = [cond for cond in COND if any(cond == key[1] for key in cells)]
 
     lines = []
     lines.append("# Forge core benchmark results\n")
-    lines.append(f"Criteria: `{CRITERIA_VERSION}`. Matrix: **{'complete' if complete else 'INCOMPLETE — provisional results only'}** ({len(runs)} / {len(expected)} cells).\n")
+    lines.append(f"Criteria: `{criteria}`. Matrix: **{'complete' if complete else 'INCOMPLETE — provisional results only'}** ({len(runs)} / {len(expected)} cells).\n")
     if manifest.get("mock"):
         lines.append("> **MOCK RUN — harness self-test only. These numbers say nothing about Forge.**\n")
     lines.append(
@@ -110,7 +138,7 @@ def main(out_dir: str):
             )
     lines.append("")
 
-    lines.append("## Aggregate: baseline vs Forge\n")
+    lines.append("## Aggregate by condition\n")
     lines.append("| Condition | Runs | Passes | Pass rate | 95% CI | Mean req completion | Drift rate | Median tokens | Median runtime (s) | Mean turns |")
     lines.append("|---|---:|---:|---:|---|---:|---:|---:|---:|---:|")
     agg = {}
@@ -150,17 +178,18 @@ def main(out_dir: str):
             )
     lines.append("")
 
-    lines.append("## Token / time overhead (ratio of medians: Forge median ÷ baseline median)\n")
-    if complete and "baseline" in agg and "forge" in agg:
-        lines.append("| Benchmark | Tokens ratio | Runtime ratio |")
-        lines.append("|---|---:|---:|")
-        for scenario in scenarios:
-            base_runs, forge_runs = cells.get((scenario, "baseline"), []), cells.get((scenario, "forge"), [])
-            bt, ft = med([run["tokens_total"] for run in base_runs]), med([run["tokens_total"] for run in forge_runs])
-            bs, fs = med([run["wall_seconds"] for run in base_runs]), med([run["wall_seconds"] for run in forge_runs])
-            lines.append(f"| {NAMES.get(scenario, scenario)} | {fmt(ft / bt, 2) if bt and ft else 'n/a'} | {fmt(fs / bs, 2) if bs and fs else 'n/a'} |")
-        bt, ft, bs, fs = agg["baseline"]["tok"], agg["forge"]["tok"], agg["baseline"]["time"], agg["forge"]["time"]
-        lines.append(f"| **All** | **{fmt(ft / bt, 2) if bt and ft else 'n/a'}** | **{fmt(fs / bs, 2) if bs and fs else 'n/a'}** |")
+    lines.append("## Token / time overhead (ratio of medians to baseline)\n")
+    if complete and "baseline" in agg and len(agg) > 1:
+        lines.append("| Benchmark | Condition | Tokens ratio | Runtime ratio |")
+        lines.append("|---|---|---:|---:|")
+        for condition in (cond for cond in conds if cond != "baseline"):
+            for scenario in scenarios:
+                base_runs, treated_runs = cells.get((scenario, "baseline"), []), cells.get((scenario, condition), [])
+                bt, ft = med([run["tokens_total"] for run in base_runs]), med([run["tokens_total"] for run in treated_runs])
+                bs, fs = med([run["wall_seconds"] for run in base_runs]), med([run["wall_seconds"] for run in treated_runs])
+                lines.append(f"| {NAMES.get(scenario, scenario)} | {COND[condition]} | {fmt(ft / bt, 2) if bt and ft else 'n/a'} | {fmt(fs / bs, 2) if bs and fs else 'n/a'} |")
+            bt, ft, bs, fs = agg["baseline"]["tok"], agg[condition]["tok"], agg["baseline"]["time"], agg[condition]["time"]
+            lines.append(f"| **All** | {COND[condition]} | **{fmt(ft / bt, 2) if bt and ft else 'n/a'}** | **{fmt(fs / bs, 2) if bs and fs else 'n/a'}** |")
     else:
         lines.append("A complete matrix with both conditions is required for a headline overhead comparison.")
     lines.append("Later requirements passing is final test evidence, not proof that the session resumed that work. Inspect starting state and diffs to establish progress.\n")
@@ -220,9 +249,14 @@ def main(out_dir: str):
     lines.append("")
     lines.append("Manifest: `MANIFEST.json`. Forge package validation: `forge-validate.log`. Progress log: `progress.log`.")
 
-    (root / "REPORT.md").write_text("\n".join(lines) + "\n")
+    (root / report_name).write_text("\n".join(lines) + "\n")
+    (root / runs_name).write_text(json.dumps(runs, indent=2) + "\n")
     print("\n".join(lines[:40]))
 
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else "results")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("out_dir", nargs="?", default="results")
+    parser.add_argument("--by-criteria", action="store_true", help="write separate reports; never pool criteria labels")
+    args = parser.parse_args()
+    main(args.out_dir, args.by_criteria)

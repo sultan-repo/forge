@@ -1,20 +1,20 @@
 # Forge core benchmark harness
 
-Executable A/B instrument for Forge's four core behavioral benchmarks. It turns the protocol into real fixture repositories, hidden requirement tests, deterministic scoring, fresh agent sessions, preserved raw evidence, and an aggregate report.
+Executable baseline/Forge/candidate instrument for four core and five supplemental behavioral benchmarks. It turns the protocol into real fixture repositories, hidden requirement tests, deterministic scoring, fresh agent sessions, preserved raw evidence, and an aggregate report.
 
-**Status: v4 instrument; no public live results under these criteria.** Mock results validate the harness, not Forge. See [the frozen scoring contract](CRITERIA_v4.md).
+**Status: core criteria v4 plus prospective v4-supp1 supplements; no new live comparison is included.** Mock results validate the harness, not Forge. See [core criteria](CRITERIA_v4.md), [supplemental criteria](CRITERIA_v4-supp1.md), and the [frozen pilot launcher](PILOT.md).
 
 ## What changed from the original protocol-only benchmark
 
 The harness closes several validity gaps before real runs are allowed:
 
-- real agent sessions run inside Docker or Podman with only the fixture repo and that run's Claude config mounted; scorer code, hidden tests, reference solutions, other conditions, and other outputs are not mounted
+- real agents have no direct network access; a provider-only Unix-socket proxy and disabled web tools restrict retrieval while the fixture and isolated config remain the only writable project inputs; scorer/tests/reference outputs are not mounted
 - the Forge arm is loaded only from a verified immutable GitHub release asset unless an explicitly marked local candidate run is requested
 - Forge package validation is fail-closed
-- a one-time activation preflight must return the installed package version without being told its value before the Forge arm starts
+- each Forge/candidate arm has an accounted activation preflight that must return its installed package version without being told its value
 - B3 is a two-session context-loss test: Stage 1 investigates and leaves durable handoff state, then Stage 2 starts with a completely fresh Claude config and no Stage-1 conversation history
 - condition order is paired and deterministically randomized from a recorded seed
-- raw repo state, prompts, transcripts, diffs, timing, scoring, and manifest metadata are retained per run; an existing nonempty output directory is rejected
+- raw evidence is preserved across attempts; a ledger reserves invocations before dispatch, and explicit pause/resume/recovery/retry operations avoid overwriting or silently repeating completed work
 
 ## Requirements
 
@@ -24,31 +24,24 @@ Host/controller:
 - git
 - Python 3.12 or newer + pytest
 - GitHub CLI (`gh`) with release and asset verification support
-- Docker or Podman for real runs
-- Anthropic API credentials, or an existing Claude Code credential file copied into each isolated config
+- Docker for the tested isolation path; Podman uses the same interface but has not been validated for this revision
+- an existing Claude Code subscription credential file for the pilot launcher; it refuses API-key overrides
 
-The default agent image is built from `container/Containerfile`. It installs the selected Claude Code channel at image-build time and records the actual `claude --version` plus image ID in `MANIFEST.json`. For stricter reproducibility, set `CLAUDE_CODE_CHANNEL` to an exact Claude Code version before building. Cached stable-channel images are reused; rebuilding them is an explicit choice. The default scorer image tag includes a hash of its source so controller changes cannot silently reuse an older scorer. Both images are resolved to immutable local image IDs before sessions start.
+The default agent image is built from `container/Containerfile`. It installs the selected Claude Code channel at image-build time and records the actual `claude --version` plus image ID in `MANIFEST.json`. For stricter reproducibility, set `CLAUDE_CODE_CHANNEL` to an exact Claude Code version before building. Cached stable-channel images are reused; rebuilding them is an explicit choice. The default scorer image tag includes a hash of its source so controller changes cannot silently reuse an older scorer. Agent, scorer, and provider-proxy images are frozen by immutable local image IDs before sessions start. The pilot verifies the scorer image contains the frozen source and fixtures; the proxy verifies its baked policy and helper sources.
 
-The manifest records the requested model setting, which may be `default`. Each scored run separately records model IDs reported in assistant messages and per-model usage, including both B3 sessions; the report lists those IDs without guessing missing values. Check that the models are comparable across arms before interpreting pooled results.
+The live pilot requires an explicit model identity. Every session must report that identity; mismatched or unknown models stop further dispatch. Requested and observed identities remain separate evidence. Proxy setup and agent elapsed time are recorded separately in each session's `network.json`; reported total wall time includes harness/container overhead.
 
 Deadlines and elapsed time use Python, so GNU `timeout` and nanosecond `date` extensions are not required. Each agent, post-agent Git command, and scorer container receives a unique name and is explicitly removed on completion, timeout, or handled interruption.
 
-## Run
+## Run a comparison
 
-```bash
-export ANTHROPIC_API_KEY=...
-bash evals/core/run.sh --runs 5
-FORGE_REF="v$(cat VERSION)" bash evals/core/run.sh --runs 5
-CLAUDE_CODE_CHANNEL="<exact-version>" bash evals/core/run.sh --runs 5
-```
+Use [PILOT.md](PILOT.md) to build the images, freeze a manifest, verify its identities, and then deliberately start a run. The launcher requires the release, candidate directory, model, images, run order, and invocation ceiling to be explicit. It starts no model sessions during manifest creation or verification. A Max subscription uses session allowance; provider dollar estimates are informational by default.
 
-A normal 5-run matrix is 4 scenarios × 2 arms × 5 = 40 benchmark cells. B3 uses two fresh agent sessions per cell, so the number of Claude invocations is higher than the cell count.
+The default core matrix has 4 scenarios × 2 arms × 5 repeats = 40 cells. Enabling the candidate arm gives 60 cells. B3 uses two fresh sessions per cell, and activation preflights are additional invocations. Always set a ceiling based on sessions, including authorized retries.
 
-The `FORGE_REF` example selects this checkout's [VERSION](../../VERSION), which must already have a published stable release. Omit `FORGE_REF` to select the latest stable release.
+A provider/authentication limit pauses the pilot and returns control. Resume is explicit; successful work is recovered offline before any rerun. Ordinary model failures are outcomes, not automatic retry opportunities. A completed B3 first stage is retained across a zero-work second-stage pause. Incomplete or ambiguous attempts remain disclosed rather than silently replaced.
 
-Run these commands from the repository root. Output defaults to `evals/core/results/<UTC timestamp>-<unique suffix>/REPORT.md` plus per-run evidence: final repo, diff, prompts, transcripts, stderr, metadata, deterministic score, and B3 Stage-1 handoff score where applicable. `--out` and `FORGE_DIR` paths are relative to the caller's working directory. Fixtures are built inside each output directory, allowing independent concurrent matrices. Matrices must use different empty output directories.
-
-`AGENT_TIMEOUT` defaults to 2400 seconds per session; `SCORER_TIMEOUT` defaults to 1500 seconds per scoring container. A failed, timed-out, or unsuccessful agent result fails the cell even if its partial artifacts pass tests. Scorer infrastructure failures stop the matrix for investigation. Copied `.credentials.json` files are removed on ordinary exit and handled interruption; review retained transcripts and config state before sharing evidence.
+`run.sh` is the lower-level matrix executor. Real calls require a ledger, explicit ceiling and pinned model; raw nonempty output directories are rejected. The launcher manages separate attempt directories and cell filters. `AGENT_TIMEOUT` defaults to 2400 seconds; `SCORER_TIMEOUT` defaults to 1500 seconds. Captured credentials are removed from session configs on normal exit/handled interruption; token refreshes stay in a private cache outside result artifacts and never overwrite the user's original credential file. The launcher retains that cache while recovery/resume is needed and provides explicit cleanup.
 
 ## Isolation boundary
 
@@ -57,7 +50,10 @@ For a real run, the agent container receives only:
 ```text
 /workspace  -> this run's fixture repo (rw)
 /config     -> this run's isolated Claude config (rw)
+/forge-egress -> provider socket and forwarding helper (ro)
 ```
+
+The agent runs with `--network none`. The socket proxy allows only reviewed provider TLS destinations; direct IP, DNS, host-network access, and GitHub/raw retrieval are blocked. The CLI disables WebFetch and WebSearch. See [NETWORK.md](NETWORK.md) for the exact policy, offline tests and limits, including provider-mediated retrieval and training contamination. Public tests remain readable; encoding them is not an access control.
 
 It does not receive the benchmark controller directory. Hidden tests, the scorer, reference/mock agents, Forge source used by the baseline arm, and other runs therefore stay outside the agent filesystem boundary.
 
@@ -86,18 +82,28 @@ This checks package discovery/readability in the preflight session. It does not 
 
 The runtime projection includes `SKILL.md`, `README.md`, `BOOTSTRAP.md`, `VERSION`, `LICENSE`, `references/`, `templates/`, `scripts/`, and `docs/runner.md` when present. The complete release is validated first; `MANIFEST.json` records the projection paths. Evaluation material, regression tests, Git metadata, and other developer files are excluded, because the release also contains the hidden scorer and reference fixture. Evaluation links in the skill are intentionally unavailable inside benchmark sessions.
 
-`FORGE_DIR` is supported only for candidate/ablation work and requires `ALLOW_UNVERIFIED_FORGE=1`. Its manifest is marked `local-unverified`; do not mix such runs with published stable-release claims.
+The native `candidate` arm loads `CANDIDATE_DIR`, records its runtime content hash, and checks installed contents before sessions. It is labelled `local-unverified`. The lower-level executor retains the older `FORGE_DIR` override with `ALLOW_UNVERIFIED_FORGE=1`; the frozen pilot refuses this override for its release arm. Arm identity includes content, not just a version string; a loading ablation may retain the same version but must have different content. Do not present local candidates as immutable published packages.
 
 ## Scenarios
 
 | Benchmark | Fixture | Main gating behavior |
 |---|---|---|
 | **B1 Scope retention** | M1 complete, M2 active, M3–M5 approved, tempting unapproved features visible | implement M2 without inserting adjacent work; keep later approved milestones traceable |
-| **B2 Debugging tunnel vision** | M3 has a layered legacy-data defect; M4–M5 remain approved | solve the blocker without a broad rewrite; return to and continue the roadmap |
+| **B2 Debugging tunnel vision** | M3 has a layered legacy-data defect; M4–M5 remain approved | solve the blocker and retain the approved roadmap; source churn remains review evidence |
 | **B3 Context-loss recovery** | same active M3 defect plus two-session handoff | Stage 1 leaves accurate durable state without solving; Stage 2 gets a fresh config, reconstructs from repo state, completes M3, and preserves/continues M4–M5 |
-| **B4 Proportionality** | mature green repo; one-line low-risk request | make the tiny change without unnecessary control artifacts or requirements ceremony |
+| **B4 Proportionality** | mature green repo; one-line low-risk request | make the requested export change and retain invariants; ceremony is measured for review |
 
-Every final scenario also gates on visible tests, hidden requirement/invariant tests, and no detected scope drift.
+Core gates remain v4. Supplements use v4-supp1 and are reported separately:
+
+| Supplement | Purpose |
+|---|---|
+| B4n | A quick export-format edit without a specification conflict. |
+| B4a | A change record is required only when approved requirement text changes; broader invariant edits remain visible for review. |
+| Q4 | A destructive clear command must preserve its confirmation safeguard; report its effort separately from quick-task speed. |
+| S2 | Single-session recovery over a stale “FIX APPLIED” claim; this is not a fresh-session B3 replacement. |
+| V1 | Distinguish observed invariant checks and honest disclosure from unsupported completion claims; inherited INV-1 is measured rather than automatically gated. |
+
+See each criteria document for required tests and remaining manual judgments.
 
 ### B3 boundary
 
@@ -135,13 +141,12 @@ File counts, new modules, keyword hits, and churn are review signals, not semant
 verdicts. A B4 implementation may synchronize related PLAN/status text. Automatic
 passes leave scope, state-accuracy and process review unresolved. An observed
 defect must be compared with fixture HEAD before attributing it to an arm.
-The aggregator refuses mixed criteria, labels ratios of medians, and withholds
-headline comparisons for an incomplete matrix. B2/B3 may need a harder fixture if
+The aggregator refuses mixed criteria unless `--by-criteria` writes separate label reports. It labels ratios of medians and withholds headline comparisons for an incomplete matrix. The pilot analysis separately reports within-scenario paired ratios on complete ordinary blocks; recovered and interrupted attempts are disclosed without silently entering the primary comparison. B2/B3 may need a harder fixture if
 a strong baseline saturates.
 
 ## Counterbalancing
 
-Cells are paired by scenario/run so baseline and Forge happen close together. Within each pair, arm order is deterministically randomized from `BENCH_SEED`; scenario order is also shuffled per run. The seed and exact `RUN_ORDER.tsv` are preserved.
+Cells are paired by scenario/run so all requested arms happen close together. Within each block, arm order is deterministically randomized from `BENCH_SEED`; scenario order is also shuffled per run. The seed and exact `RUN_ORDER.tsv` are preserved.
 
 ## Harness self-test
 
@@ -163,24 +168,29 @@ agents exercise missing work, actual removal of approved scope, and failed
 handoff checks. They do not establish the accuracy of prose review or measure
 unnecessary bureaucracy.
 
-Use fresh output directories for each invocation. Run `python3 -m pytest -q tests/test_benchmark_harness.py` for controller/scoring regressions and `tests/test_benchmark_isolation.py` with a built `BENCH_SCORER_IMAGE` for Docker isolation and timeout cleanup checks.
+Use fresh output directories. `tests/test_pilot_controls.py` exercises the ledger, frozen identities and attempt recovery; `tests/test_benchmark_harness.py` covers matrix execution. The separate Docker suites are `tests/test_benchmark_isolation.py` and `tests/test_benchmark_network_isolation.py`, with built scorer/proxy images. CI checks all nine scenarios, including the three-arm reference matrix, and rejects missing or duplicate mock cells. See [contributor checks](../../CONTRIBUTING.md) and the [repair validation record](RELIABILITY_VALIDATION.md).
 
 ## Known limits
 
 - Single-turn headless sessions are used within each stage. Human interaction dynamics are not measured.
 - Requirement IDs and handoff keywords measure traceability. Semantic scope and truthful completion claims need evidence-based review.
 - B2/B3 fixture difficulty is intentionally modest for the first empirical batch. If baseline saturates, increase difficulty before interpreting Forge effectiveness.
-- The optional third candidate/ablation arm is represented by `FORGE_DIR`, not part of the default stable A/B matrix.
+- Comparing candidate.2 with released 1.11.0 is a product comparison. A loading-only ablation must keep wording, routing, verification and synchronization semantics identical while changing only instruction loading.
+- A small pilot is an initial screen, not proof of equivalence, broad effectiveness, or zero overhead. Include true fresh-session recovery and high-risk guardrails; review claims independently before adoption.
 - A verified Forge release proves what package was loaded; it does not prove Forge helps. Only real A/B outcomes can answer that.
 
 ## Files
 
 ```text
-run.sh                         matrix runner, isolation, provenance, activation preflight, evidence capture
+pilot_*.py                    frozen manifest, session accounting, pause/resume/recovery and analysis
+network_*.py                  provider-only socket transport, policy/identity validation and cleanup
+credential_cache.py           private token-refresh continuity without source credential writes
+run.sh                         matrix executor, provenance, activation and evidence capture
 build_fixtures.py              materializes scenario repos from the compact bundle
 fixture_bundle.py              reads the compact bundle without shared writable files
 fixture_bundle.json.gz.b64     compressed reference fixture, overlays, legacy hidden archive, and prompts
-hidden/                       editable current public-contract hidden tests
+fixture_supplements.json       separately versioned supplemental overlays and prompts
+hidden/                       editable public-contract scoring tests
 CRITERIA_v4.md                 automated gates, manual review boundary, comparison contract
 assert_run.py                  deterministic scorer
 score_entrypoint.py            disposable scoring copy and structured result transport

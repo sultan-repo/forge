@@ -15,7 +15,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from assert_run import CRITERIA_VERSION
+from assert_run import SPEC, criteria_for
 
 SCORER_ROOT = Path("/scorer")
 INPUT_REPO = Path("/input")
@@ -72,7 +72,7 @@ def build_command(args: argparse.Namespace) -> list[str]:
 def validate_result(payload: object, scenario: str, phase: str) -> None:
     if not isinstance(payload, dict) or payload.get("scenario") != scenario:
         raise ValueError("isolated scorer result has the wrong scenario")
-    if payload.get("criteria_version") != CRITERIA_VERSION:
+    if payload.get("criteria_version") != criteria_for(scenario):
         raise ValueError("isolated scorer result has the wrong criteria version")
     if phase == "stage1" and payload.get("phase") != "stage1":
         raise ValueError("isolated scorer result has the wrong phase")
@@ -87,7 +87,7 @@ def validate_result(payload: object, scenario: str, phase: str) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--phase", choices=("stage1", "final"), default="final")
-    parser.add_argument("--scenario", required=True, choices=("b1", "b2", "b3", "b4"))
+    parser.add_argument("--scenario", required=True, choices=tuple(SPEC))
     parser.add_argument("--meta", required=True)
     parser.add_argument("--transcript")
     parser.add_argument("--stage1-transcript")
