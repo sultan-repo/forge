@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.11.0
 
 Adaptive execution and end-to-end reliability revision:
 
@@ -12,7 +12,7 @@ Adaptive execution and end-to-end reliability revision:
 - revises the public benchmark's automatic criteria and evidence accounting; deterministic results do not establish model effectiveness
 - expands behavioral cases and CI coverage for instruction and evaluation changes
 
-Project readiness/preflight additions (not yet released):
+Project readiness/preflight additions:
 
 - adds `/forge preflight` as an optional readiness flow for requested external-agent execution
 - adds `scripts/forge preflight --configure` for a short project setup covering execution mode, current Claude model acceptance, Codex review policy, local Claude authentication intent, and live-readiness preference
