@@ -1,0 +1,33 @@
+name: Forge 2 source snapshot
+
+on:
+  push:
+    branches: [forge2-reviewed-release]
+    paths: [.github/workflows/forge2-source-snapshot.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: 285e4eb79d032a7cc80c3b96e9052ca8e951d27a
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Export immutable source and Git prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 285e4eb79d032a7cc80c3b96e9052ca8e951d27a
+          mkdir -p "$RUNNER_TEMP/forge2-source"
+          git bundle create "$RUNNER_TEMP/forge2-source/forge-base.bundle" HEAD
+          sha256sum "$RUNNER_TEMP/forge2-source/forge-base.bundle" > "$RUNNER_TEMP/forge2-source/SHA256SUMS"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: forge2-source-baseline
+          path: ${{ runner.temp }}/forge2-source/
+          retention-days: 7
+          if-no-files-found: error
