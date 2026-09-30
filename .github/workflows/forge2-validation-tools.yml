@@ -1,0 +1,22 @@
+name: Forge 2 validation tools
+on:
+  push:
+    branches: [forge2-reviewed-release]
+    paths: [.github/workflows/forge2-validation-tools.yml]
+permissions:
+  contents: read
+jobs:
+  tools:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - name: Download pinned validators
+        run: python -m pip download --dest wheels ruff==0.16.6 mypy==2.3.1
+      - uses: actions/upload-artifact@v7
+        with:
+          name: forge2-validation-wheels
+          path: wheels/
+          retention-days: 3
+          if-no-files-found: error
