@@ -1,0 +1,27 @@
+name: Forge 2 source snapshot
+on:
+  push:
+    branches: [work/forge-2-source]
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: 285e4eb79d032a7cc80c3b96e9052ca8e951d27a
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Export public repository Git objects only
+        shell: bash
+        run: |
+          git branch forge2-base HEAD
+          git bundle create /tmp/forge2-base.bundle forge2-base
+          sha256sum /tmp/forge2-base.bundle
+      - uses: actions/upload-artifact@v7
+        with:
+          name: forge2-base-source
+          path: /tmp/forge2-base.bundle
+          retention-days: 3
+          if-no-files-found: error
