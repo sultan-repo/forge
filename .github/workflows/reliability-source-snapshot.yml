@@ -1,0 +1,22 @@
+name: Reliability source snapshot
+on:
+  push:
+    branches: [fix/core-reliability-handoffs]
+    paths: [.github/workflows/reliability-source-snapshot.yml]
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Archive approved baseline (tracked public source only)
+        run: git archive --format=tar.gz --output=forge-baseline.tar.gz HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: forge-reliability-baseline
+          path: forge-baseline.tar.gz
+          retention-days: 1
