@@ -174,6 +174,7 @@ class FakeRun:
 
     def __init__(self) -> None:
         report = {
+            "schema_version": 1,
             "summary": "implemented",
             "acceptance_results": {},
             "validation": [],
@@ -823,10 +824,12 @@ def test_malformed_implementation_evidence_is_not_labeled_structured() -> None:
         "discoveries": ["found"], "known_uncertainties": [False],
     })}))
     assert report["structured"] is False
-    assert report["acceptance_results"] == {}
-    assert report["validation"] == []
-    assert report["discoveries"] == []
-    assert report["known_uncertainties"] == []
+    assert report["acceptance_results"] == {"FR-001": "true"}
+    assert report["validation"] == [{"claim": "passed"}]
+    assert report["discoveries"] == [{"summary": "found"}]
+    assert report["known_uncertainties"] == ["false"]
+    assert report["normalization_issues"]
+    assert json.loads(json.loads(report["raw_report"])["result"])["validation"] == ["passed"]
 
 
 def test_status_cannot_reuse_approval_for_another_control_file(tmp_path: Path, monkeypatch) -> None:

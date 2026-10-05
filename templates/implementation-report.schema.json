@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Forge Implementer Report (producer contract)",
+  "description": "Agent claims, not independently verified evidence. Legacy input is normalized losslessly by scripts/implementation_report.py.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "summary",
+    "acceptance_results",
+    "validation",
+    "discoveries",
+    "known_uncertainties"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "summary": {
+      "type": "string"
+    },
+    "acceptance_results": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "validation": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "claim"
+        ],
+        "additionalProperties": true,
+        "properties": {
+          "claim": {
+            "type": "string",
+            "pattern": "\\S"
+          },
+          "command": {
+            "type": "string"
+          },
+          "result": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "object",
+            "description": "Optional implementer-supplied reference metadata. Missing fields never imply equivalence or verification.",
+            "additionalProperties": true,
+            "properties": {
+              "reported_origin": {
+                "type": "string"
+              },
+              "tested_commit": {
+                "type": "string"
+              },
+              "command": {
+                "type": "string"
+              },
+              "cwd": {
+                "type": "string"
+              },
+              "environment_identity": {
+                "type": "string"
+              },
+              "dependency_identity": {
+                "type": "string"
+              },
+              "result": {
+                "type": "string"
+              },
+              "artifact": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "discoveries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "summary"
+        ],
+        "additionalProperties": true,
+        "properties": {
+          "summary": {
+            "type": "string",
+            "pattern": "\\S"
+          },
+          "scope_relevance": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "known_uncertainties": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

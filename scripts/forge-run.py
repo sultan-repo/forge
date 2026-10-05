@@ -28,6 +28,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from adapters import ClaudeCodeImplementer, CodexCLIReviewer
 from adapters.base import AdapterError
+from implementation_report import REPORT_EXAMPLE, evidence_references, parse_implementation_report
 
 CONTROL_DEFAULT = Path(".claude/project-control.json")
 PROFILE_DEFAULT = Path(".claude/forge/execution-profile.json")
@@ -521,52 +522,39 @@ def validate_control_after_agent(
         )
 
 
-def parse_implementation_report(stdout: str) -> dict[str, Any]:
-    result: dict[str, Any] = {
-        "summary": "",
-        "acceptance_results": {},
-        "validation": [],
-        "discoveries": [],
-        "known_uncertainties": [],
-        "structured": False,
-    }
-    try:
-        outer = json.loads(stdout)
-    except json.JSONDecodeError:
-        result["summary"] = stdout[-2000:]
-        return result
-    if not isinstance(outer, dict):
-        result["summary"] = str(outer)[-2000:]
-        return result
-    inner = outer.get("result")
-    if not isinstance(inner, str):
-        result["summary"] = json.dumps(outer)[-2000:]
-        return result
-    try:
-        payload = json.loads(inner)
-    except json.JSONDecodeError:
-        result["summary"] = inner[-2000:]
-        return result
-    if not isinstance(payload, dict):
-        result["summary"] = inner[-2000:]
-        return result
-    result["summary"] = str(payload.get("summary") or "")[-2000:]
-    acceptance = payload.get("acceptance_results")
-    acceptance_valid = isinstance(acceptance, dict) and all(isinstance(item, str) for item in acceptance.values())
-    if acceptance_valid:
-        result["acceptance_results"] = payload["acceptance_results"]
-    for key, item_type in (("validation", dict), ("discoveries", dict), ("known_uncertainties", str)):
-        items = payload.get(key)
-        if isinstance(items, list) and all(isinstance(item, item_type) for item in items):
-            result[key] = items
-    result["structured"] = (
-        isinstance(payload.get("summary"), str)
-        and acceptance_valid
-        and all(key in payload and result[key] == payload[key] for key in (
-            "validation", "discoveries", "known_uncertainties"
-        ))
+def persist_implementation_report(
+    root: Path,
+    packet_id: str,
+    attempt: int,
+    stdout: str,
+    *,
+    implementation_outcome: str = "adapter_completed",
+) -> dict[str, Any]:
+    """Save private, unique original output before parsing or post-agent checks.
+
+    A repeated attempt never replaces an earlier report. Adapter completion is
+    not a product-success assertion. Runtime artifacts remain controller-local.
+    """
+    validate_packet_id(packet_id)
+    directory = runtime_path(root, "reports")
+    directory.mkdir(parents=True, exist_ok=True)
+    descriptor, name = tempfile.mkstemp(
+        dir=directory, prefix=f"{packet_id}-attempt-{attempt:02d}-", suffix=".stdout.txt",
     )
-    return result
+    raw_path = Path(name)
+    data = stdout.encode("utf-8", "surrogateescape")
+    with os.fdopen(descriptor, "wb") as handle:
+        handle.write(data)
+        handle.flush()
+        os.fsync(handle.fileno())
+    report = parse_implementation_report(stdout)
+    # The exact original has its own private artifact, not a second embedded copy.
+    report.pop("raw_report", None)
+    report["raw_report_path"] = raw_path.relative_to(root).as_posix()
+    report["raw_report_sha256"] = hashlib.sha256(data).hexdigest()
+    report["implementation_outcome"] = implementation_outcome
+    atomic_json(raw_path.with_suffix(".json"), report)
+    return report
 
 
 def implementation_prompt(
@@ -592,15 +580,14 @@ Rules:
 - Do not mark the packet approved, independently reviewed, reconciled, or done.
 - Do not commit or edit .claude/forge/runtime; the runner owns checkpoints/evidence.
 
-Finish with a JSON object only:
-{{
-  "summary": "short outcome",
-  "acceptance_results": {{}},
-  "validation": [],
-  "discoveries": [],
-  "known_uncertainties": []
-}}
-Only report validation you actually ran.
+Finish with a JSON object only, following this versioned example. Replace example
+text with actual results; empty objects/arrays are appropriate when there is nothing to report:
+{json.dumps(REPORT_EXAMPLE, indent=2)}
+Only report validation you actually ran. Do not invent commands, exit codes, or evidence.
+An optional validation.evidence object may reference existing results using reported_origin,
+tested_commit, command, cwd, environment_identity, dependency_identity, result, and artifact.
+Omit unknown metadata. Never label the final checkpoint as tested if code changed after the check.
+References are still implementer-supplied claims until their primary artifacts are verified.
 """
     if findings:
         prompt += f"""
@@ -620,14 +607,31 @@ def reviewer_prompt(
     reviewed_commit: str,
     cycle: int,
     handoff: dict[str, Any] | None = None,
+    previous_review: dict[str, Any] | None = None,
 ) -> str:
     packet = state["work_packets"][packet_id]
+    scope = (
+        f"The packet began at {packet_base}. Inspect the complete diff {packet_base}..{reviewed_commit}, "
+        "then inspect affected contracts, relevant source/tests, and supporting evidence."
+    )
+    if previous_review is not None:
+        previous_commit = previous_review["reviewed_commit"]
+        scope = (
+            f"Correction review: start with the fix {previous_commit}..{reviewed_commit}, "
+            "the prior current-scope findings below, and affected contracts. "
+            f"The complete packet diff {packet_base}..{reviewed_commit} remains available. "
+            "Broaden inspection for regressions, risk, or missing evidence; do not review only changed lines.\n"
+            f"Prior findings (review cycle {previous_review['cycle']} at {previous_commit}):\n"
+            f"{json.dumps(current_findings(previous_review), indent=2)}"
+        )
+    if handoff is not None:
+        handoff = {key: value for key, value in handoff.items() if key != "raw_report"}
+        handoff["validation_evidence"] = evidence_references(handoff.get("validation"), reviewed_commit)
     return f"""
 You are the independent REVIEWER for Forge Work Packet {packet_id}.
 
 Review the repository at commit {reviewed_commit} against approved project intent.
-The packet began at {packet_base}. Inspect the complete diff {packet_base}..{reviewed_commit},
-then inspect the affected contracts, relevant source/tests, and supporting evidence.
+{scope}
 Expand investigation when risk or missing evidence warrants it.
 
 Packet snapshot:
@@ -648,13 +652,24 @@ Review specification compliance first, then correctness/regressions, then securi
 reliability/performance and test/failure-path adequacy where relevant.
 
 Rules:
-- Treat implementer summaries as claims, not evidence.
+- Treat implementer summaries and supplied evidence metadata as claims, not verified evidence.
+- Reuse an existing result only after verifying its primary artifact, actual executor/origin,
+  exact tested checkpoint, command, working directory, dependency and environment identity,
+  outcome, and limitations. Matching metadata alone is insufficient. Missing metadata is not equivalence.
+- Do not repeat a covered check merely because another agent ran it. Explain repeats by changed
+  inputs, unresolved failures, flakiness diagnosis, or a distinct platform/boundary.
+- Runtime raw-report paths are controller-local, not files in this isolated checkout.
+  A sandbox capability limit is not a product defect; request authorized execution or existing
+  evidence when it materially prevents assurance. Never weaken sandboxing to obtain it.
 - Do not edit production files.
 - Ignore stylistic preference and low-value lint commentary unless it has credible impact.
 - Classify severity separately from scope relevance.
 - Adjacent/future/unrelated findings do not automatically enter current implementation.
-- PASS only when no unresolved current_required/current_blocking Critical or High issue remains
-  and the implementation is sufficiently supported by evidence.
+- Use current_required for demonstrated unmet acceptance requirements, and current_blocking
+  for demonstrated blockers. Suggestions are not requirements merely because of their severity.
+- PASS only when no unresolved current_required/current_blocking finding remains at any severity
+  and the implementation is sufficiently supported by evidence. Record authorized scope changes;
+  do not silently reinterpret required behavior as an optional improvement.
 """.strip()
 
 
@@ -761,7 +776,7 @@ def validate_review_contract(
         blocking = [
             finding
             for finding in findings
-            if finding["severity"] in SERIOUS and finding["scope_relevance"] in CURRENT_SCOPES
+            if finding["scope_relevance"] in CURRENT_SCOPES
         ]
         if blocking:
             raise ForgeRunnerError("Reviewer returned PASS with unresolved blocking findings.")
@@ -886,6 +901,40 @@ def latest_completed_review(root: Path, packet_id: str, execution: dict[str, Any
     return review
 
 
+def correction_review_context(
+    root: Path, packet_id: str, execution: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Load the actual preceding review, validating its own checkpoint identity."""
+    cycle = execution["review_cycle"]
+    if cycle == 1:
+        return None
+    previous_cycle = cycle - 1
+    if execution.get("last_completed_review") != previous_cycle:
+        raise ForgeRunnerError("Correction review is missing its preceding completed review.")
+    previous_path = review_result_path(root, packet_id, previous_cycle)
+    if not previous_path.exists():
+        # Older or partially retained runtime records can still receive a full
+        # independent review; absent history must not masquerade as reviewed fixes.
+        return None
+    previous = read_json(previous_path)
+    checkpoint = previous.get("reviewed_commit")
+    if not isinstance(checkpoint, str) or not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", checkpoint):
+        raise ForgeRunnerError("Correction review has an invalid preceding checkpoint.")
+    validate_review_contract(
+        previous, packet_id=packet_id,
+        baseline_revision=execution["baseline_revision"], plan_revision=execution["plan_revision"],
+        packet_base=execution["packet_base_commit"], reviewed_commit=checkpoint, cycle=previous_cycle,
+    )
+    if previous["verdict"] != "CHANGES_REQUIRED" or not current_findings(previous):
+        raise ForgeRunnerError("The preceding review does not identify a current-scope correction.")
+    ancestry = run_local(
+        ["git", "merge-base", "--is-ancestor", checkpoint, execution["implementation_commit"]], root,
+    )
+    if ancestry.returncode != 0:
+        raise ForgeRunnerError("The correction checkpoint does not descend from the preceding review.")
+    return previous
+
+
 def write_handoff(
     root: Path,
     packet_id: str,
@@ -907,6 +956,13 @@ def write_handoff(
             "cycle": cycle,
             "files_changed": changed_files(root, packet_base, implementation_commit),
             "agent_report_structured": report["structured"],
+            "report_format": report.get("report_format", "legacy"),
+            "normalization_issues": report.get("normalization_issues", []),
+            "raw_report_path": report.get("raw_report_path"),
+            "raw_report_sha256": report.get("raw_report_sha256"),
+            "implementation_outcome": report.get("implementation_outcome", "unknown"),
+            "report_origin": "implementer_claim",
+            "validation_evidence": evidence_references(report["validation"], implementation_commit),
             "summary": report["summary"],
             "acceptance_results": report["acceptance_results"],
             "validation": report["validation"],
@@ -1136,10 +1192,20 @@ def run_packet(
                     implementation_prompt(packet_id, dispatch_state, findings, control_rel),
                     root,
                 )
-            except (AdapterError, KeyboardInterrupt, SystemExit):
+            except AdapterError as exc:
+                if exc.run is not None:
+                    persist_implementation_report(
+                        root, packet_id, execution["implementation_attempt"], exc.run.stdout,
+                        implementation_outcome="adapter_failed",
+                    )
                 validate_control_after_agent(root, control_path, packet_id, previous_control_text)
                 raise
-            report = parse_implementation_report(result.stdout)
+            except (KeyboardInterrupt, SystemExit):
+                validate_control_after_agent(root, control_path, packet_id, previous_control_text)
+                raise
+            report = persist_implementation_report(
+                root, packet_id, execution["implementation_attempt"], result.stdout,
+            )
             post_state = validate_control_after_agent(
                 root,
                 control_path,
@@ -1233,6 +1299,7 @@ def run_packet(
                 return 2
 
             assert_review_target_unchanged(root, reviewed_commit)
+            previous_review = correction_review_context(root, packet_id, execution)
             execution["phase"] = "reviewing"
             save_execution_state(root, packet_id, execution)
             append_history(
@@ -1255,6 +1322,7 @@ def run_packet(
                         reviewed_commit,
                         cycle,
                         read_json(handoff_file) if handoff_file.exists() else None,
+                        previous_review,
                     ),
                     checkout,
                     REVIEW_SCHEMA,

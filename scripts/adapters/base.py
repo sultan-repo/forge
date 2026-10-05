@@ -16,6 +16,10 @@ from types import FrameType
 class AdapterError(RuntimeError):
     """Raised when an external coding-agent adapter cannot complete its role."""
 
+    def __init__(self, message: str, *, run: AgentRun | None = None) -> None:
+        super().__init__(message)
+        self.run = run
+
 
 @dataclass(frozen=True)
 class AgentRun:
