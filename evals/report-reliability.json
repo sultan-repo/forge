@@ -1,0 +1,39 @@
+{
+  "skill_name": "forge",
+  "evals": [
+    {
+      "id": "report-recovery",
+      "prompt": "An implementation has finished. Its saved report contains seven validation strings and six discovery strings, but the old handoff has empty arrays and is marked unstructured. The current source checkpoint has not changed. Recover the handoff without rerunning product implementation or inventing evidence.",
+      "expected_output": "Preserve the original report and normalize the strings individually as unverified claims. Keep malformed values and valid siblings recoverable, describe normalization issues, and distinguish report format from implementation outcome. Do not dispatch another implementation to repair formatting.",
+      "files": [],
+      "expectations": [
+        "Retains all supplied validation and discovery information and the original report",
+        "Does not invent commands, exit codes, tested revisions, or independent verification",
+        "Uses local report-only recovery rather than repeating product implementation"
+      ]
+    },
+    {
+      "id": "required-finding-severity",
+      "prompt": "The independent review returns PASS but includes an unresolved current_required Low finding showing that an approved acceptance requirement is absent. It also lists a High adjacent improvement. Decide whether to approve and what enters correction scope.",
+      "expected_output": "Reject the contradictory PASS for the unresolved required finding regardless of severity. Keep the adjacent improvement deferred unless authorized; preserve bounded independent review and reconciliation.",
+      "files": [],
+      "expectations": [
+        "Does not approve demonstrated unmet required behavior merely because severity is Low",
+        "Does not implement the High adjacent improvement without authorization",
+        "Preserves required independent review and current acceptance criteria"
+      ]
+    },
+    {
+      "id": "correction-evidence-applicability",
+      "prompt": "Review a correction against the previous checkpoint and findings. There is an externally supplied test artifact with matching command, dependency, environment, and exact current-checkpoint metadata, but its claimed CI origin has not been verified. Another artifact covers the prior checkpoint. Browser tests cannot run in your read-only sandbox. Avoid redundant work without weakening required assurance.",
+      "expected_output": "Inspect the correction and affected contracts with the complete packet diff available. Verify the primary artifact and its provenance before reusing the matching result. Treat prior-checkpoint evidence as stale for automatic exact-checkpoint reuse. Explain material capability gaps and obtain existing evidence or authorized execution rather than weakening the sandbox or automatically running every suite again.",
+      "files": [],
+      "expectations": [
+        "Uses prior findings and correction identity without becoming blind to affected contracts",
+        "Does not treat matching implementer-supplied metadata as independent verification",
+        "Distinguishes exact-checkpoint applicability, stale evidence, and infrastructure limitations",
+        "Explains any repeated validation and retains independent judgment and sandbox boundaries"
+      ]
+    }
+  ]
+}

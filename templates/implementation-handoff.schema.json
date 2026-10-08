@@ -24,6 +24,13 @@
     "cycle": {"type": "integer", "minimum": 1},
     "files_changed": {"type": "array", "items": {"type": "string"}},
     "agent_report_structured": {"type": "boolean"},
+    "report_format": {"enum": ["structured", "normalized", "unstructured", "legacy"]},
+    "normalization_issues": {"type": "array", "items": {"type": "string"}},
+    "raw_report_path": {"type": ["string", "null"]},
+    "raw_report_sha256": {"type": ["string", "null"]},
+    "implementation_outcome": {"enum": ["adapter_completed", "adapter_failed", "unknown"]},
+    "report_origin": {"const": "implementer_claim"},
+    "validation_evidence": {"type": "array", "items": {"type": "object"}},
     "summary": {"type": "string"},
     "acceptance_results": {
       "type": "object",

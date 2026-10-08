@@ -57,5 +57,5 @@ class ClaudeCodeImplementer:
             payload = None
         reported_failure = isinstance(payload, dict) and payload.get("is_error") is True
         if result.returncode != 0 or reported_failure:
-            raise AdapterError(f"Claude Code implementation failed: {failure_detail(payload, result)}")
+            raise AdapterError(f"Claude Code implementation failed: {failure_detail(payload, result)}", run=result)
         return result
